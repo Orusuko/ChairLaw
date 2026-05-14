@@ -204,6 +204,13 @@ TABLE_HEADERS = ("Empleado", "Entrada", "Salida",
 # Anchos mínimos en px (sin stretch al ancho de la ventana): la tabla queda compacta a la izquierda.
 TABLE_COL_MIN_PX = (110, 72, 72, 148, 148, 148, 68)
 
+# Tabla GUI: mismos paddings y anclas cabecera ↔ filas para alinear texto.
+TBL_CELL_GRID_PAD = 2
+TBL_CELL_INNER_PADX = (6, 6)
+TBL_CELL_INNER_PADY = (6, 8)
+TBL_CELL_ANCHORS = (
+    "w", "center", "center", "center", "center", "center", "center")
+
 DEFAULT_EMPLOYEES: list[Employee] = []
 
 
@@ -580,15 +587,37 @@ class HorariosApp(ctk.CTk):
         for ci, wpx in enumerate(TABLE_COL_MIN_PX):
             self._tbl_header_inner.columnconfigure(ci, weight=0, minsize=wpx)
 
+        hdr_fonts = (
+            (FONT, 11, "bold"),
+            ("Consolas", 11),
+            ("Consolas", 11),
+            (FONT, 11, "bold"),
+            (FONT, 11, "bold"),
+            (FONT, 11, "bold"),
+            (FONT, 11, "bold"),
+        )
+        apx = TBL_CELL_INNER_PADX
+        apy = TBL_CELL_INNER_PADY
+        gpd = TBL_CELL_GRID_PAD
         for col_i, hdr in enumerate(TABLE_HEADERS):
-            ax = "w" if col_i == 0 else "center"
+            ax = TBL_CELL_ANCHORS[col_i]
+            hf = ctk.CTkFrame(self._tbl_header_inner, fg_color="transparent")
+            hf.grid(row=0, column=col_i, sticky="nsew",
+                    padx=gpd, pady=gpd)
+
             ctk.CTkLabel(
-                self._tbl_header_inner,
+                hf,
                 text=hdr,
-                font=(FONT, 11, "bold"),
+                font=hdr_fonts[col_i],
                 text_color="#c9d1d9",
                 anchor=ax,
-            ).grid(row=0, column=col_i, sticky="ew", padx=2, pady=2)
+                justify="center" if ax == "center" else "left",
+            ).pack(
+                expand=True,
+                fill="both",
+                padx=apx,
+                pady=apy,
+            )
 
         bot_ln = ctk.CTkFrame(head_wrap, fg_color=BLUE, height=2, corner_radius=0)
         bot_ln.pack(fill="x")
@@ -624,7 +653,7 @@ class HorariosApp(ctk.CTk):
             (FONT, 11),
             (FONT, 11, "bold"),
         )
-        anchors = ("w", "center", "center", "center", "center", "center", "center")
+        anchors = TBL_CELL_ANCHORS
 
         est_txt = valores[6]
 
@@ -654,7 +683,13 @@ class HorariosApp(ctk.CTk):
                 border_width=1,
                 border_color=TBL_GRIDLINE,
             )
-            cf.grid(row=0, column=col_i, sticky="nsew", padx=2, pady=3)
+            cf.grid(
+                row=0,
+                column=col_i,
+                sticky="nsew",
+                padx=TBL_CELL_GRID_PAD,
+                pady=TBL_CELL_GRID_PAD,
+            )
 
             opt = {}
             wl = wrap_by_col[col_i]
@@ -669,7 +704,12 @@ class HorariosApp(ctk.CTk):
                 anchor=anchors[col_i],
                 justify="center" if anchors[col_i] == "center" else "left",
                 **opt,
-            ).pack(expand=True, fill="both", padx=4, pady=6)
+            ).pack(
+                expand=True,
+                fill="both",
+                padx=TBL_CELL_INNER_PADX,
+                pady=TBL_CELL_INNER_PADY,
+            )
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
