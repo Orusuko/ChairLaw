@@ -1,21 +1,108 @@
-import { useState, useRef, useCallback } from 'react';
-import { generateSchedule, timeToMin, minToTime } from './algorithm';
-import type { Employee, BreakType, ScheduledEmployee } from './types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { toPng } from 'html-to-image';
+import { generateSchedule, timeToMin } from './algorithm';
+import type { BreakSlot, BreakType, Employee, ScheduledEmployee } from './types';
 import { BREAK_LABEL } from './types';
-
-// ─── Datos iniciales ──────────────────────────────────────────────────────────
+import {
+  axisLabelMinToTime,
+  formatShiftLine,
+  formatSlotAmPm,
+  timeStrAmPm,
+  validTime,
+} from './timeFormat';
+import './App.css';
 
 const INITIAL_EMPLOYEES: Employee[] = [];
 
 const BREAK_COLORS: Record<BreakType, string> = {
-  silla1: 'var(--color-blue)',
-  break:  'var(--color-green)',
-  silla2: 'var(--color-amber)',
+  silla1: '#4a9eff',
+  break:  '#3fa266',
+  silla2: '#e09a30',
 };
 
-// ─── Timeline SVG ─────────────────────────────────────────────────────────────
+function slotByType(brks: BreakSlot[], btype: BreakType): BreakSlot | undefined {
+  return brks.find(b => b.type === btype);
+}
 
-function Timeline({ scheduled }: { scheduled: ScheduledEmployee[] }) {
+function escapeCsvCell(v: string): string {
+  if (/[",\n\r]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
+  return v;
+}
+
+function buildCsv(scheduled: ScheduledEmployee[]): string {
+  const BOM = '\uFEFF';
+  const lines: string[] = [
+    [
+      'Empleado',
+      'Entrada (24 h)',
+      'Salida (24 h)',
+      'Entrada (AM/PM)',
+      'Salida (AM/PM)',
+      'Ley Silla 1',
+      'Break',
+      'Ley Silla 2',
+      'Estado',
+    ].map(escapeCsvCell).join(','),
+  ];
+
+  for (const emp of scheduled) {
+    const entAmpm = emp.entry ? timeStrAmPm(emp.entry) : '';
+    const salAmpm = emp.exit ? timeStrAmPm(emp.exit) : '';
+    if (!emp.breaks.length) {
+      lines.push(
+        [
+          emp.name,
+          emp.entry,
+          emp.exit,
+          entAmpm,
+          salAmpm,
+          '',
+          '',
+          '',
+          'Sin descanso',
+        ].map(escapeCsvCell).join(','),
+      );
+      continue;
+    }
+    const s1 = slotByType(emp.breaks, 'silla1');
+    const bk = slotByType(emp.breaks, 'break');
+    const s2 = slotByType(emp.breaks, 'silla2');
+    lines.push(
+      [
+        emp.name,
+        emp.entry,
+        emp.exit,
+        entAmpm,
+        salAmpm,
+        formatSlotAmPm(s1),
+        bk ? formatSlotAmPm(bk) : '—',
+        formatSlotAmPm(s2),
+        emp.hasConflict ? 'CONFLICTO' : 'OK',
+      ].map(escapeCsvCell).join(','),
+    );
+  }
+  return BOM + lines.join('\r\n');
+}
+
+function downloadBlob(filename: string, mime: string, content: string | Blob) {
+  const blob = typeof content === 'string' ? new Blob([content], { type: mime }) : content;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function timestampForFile(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+type TimelineProps = { scheduled: ScheduledEmployee[]; widthAvail: number };
+
+function Timeline({ scheduled, widthAvail }: TimelineProps) {
   if (scheduled.length === 0) return null;
 
   const all = scheduled.flatMap(e => [
@@ -23,168 +110,166 @@ function Timeline({ scheduled }: { scheduled: ScheduledEmployee[] }) {
     timeToMin(e.exit),
     ...e.breaks.flatMap(b => [b.start, b.end]),
   ]);
-  const minT  = Math.min(...all);
-  const maxT  = Math.max(...all);
+  const minT = Math.min(...all);
+  const maxT = Math.max(...all);
   const range = Math.max(maxT - minT, 60);
 
-  const ROW_H    = 34;
-  const ROW_GAP  = 6;
-  const LABEL_W  = 140;
-  const TL_W     = 680;
-  const AXIS_H   = 28;
-  const PAD_TOP  = 4;
+  const LABEL_W = 150;
+  const MARGIN = 20;
+  const TL_W = Math.max(480, Math.min(widthAvail - LABEL_W - MARGIN * 2, 920));
+  const dx = Math.max(MARGIN / 2, Math.floor((widthAvail - LABEL_W - TL_W) / 2));
 
-  const toX = (m: number) => LABEL_W + ((m - minT) / range) * TL_W;
-  const totalH = PAD_TOP + scheduled.length * (ROW_H + ROW_GAP) + AXIS_H;
+  const ROW_H = 40;
+  const ROW_GAP = 0;
+  const AXIS_H = 34;
+  const PAD_TOP = 12;
+
+  const toX = (m: number) => dx + LABEL_W + ((m - minT) / range) * TL_W;
+  const totalH = PAD_TOP + scheduled.length * ROW_H + AXIS_H;
 
   const tickStart = Math.ceil(minT / 60) * 60;
   const ticks: number[] = [];
   for (let t = tickStart; t <= maxT; t += 60) ticks.push(t);
 
-  const halfTicks: number[] = [];
-  for (let t = tickStart - 30; t <= maxT; t += 60) {
-    if (t > minT && t < maxT) halfTicks.push(t);
-  }
-
   return (
-    <div className="timeline-scroll">
+    <div className="timeline-canvas-wrap">
       <svg
-        width={LABEL_W + TL_W + 8}
+        width={dx + LABEL_W + TL_W + MARGIN}
         height={totalH}
-        style={{ display: 'block', minWidth: 560 }}
+        className="timeline-svg"
+        style={{ display: 'block', minWidth: dx + LABEL_W + TL_W }}
       >
-        {/* Fondo de filas alternadas */}
-        {scheduled.map((_, i) => (
-          <rect
-            key={i}
-            x={LABEL_W}
-            y={PAD_TOP + i * (ROW_H + ROW_GAP)}
-            width={TL_W}
-            height={ROW_H}
-            fill={i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent'}
-          />
-        ))}
+        {scheduled.map((_, i) => {
+          const y = PAD_TOP + i * (ROW_H + ROW_GAP);
+          const fill = i % 2 === 0 ? '#141414' : 'transparent';
+          return (
+            <rect
+              key={i}
+              x={dx + LABEL_W}
+              y={y}
+              width={TL_W}
+              height={ROW_H}
+              fill={fill}
+            />
+          );
+        })}
 
-        {/* Líneas de media hora (sutiles) */}
-        {halfTicks.map(t => (
+        {ticks.map(t => (
           <line
-            key={`h${t}`}
-            x1={toX(t)} y1={PAD_TOP}
-            x2={toX(t)} y2={totalH - AXIS_H}
-            stroke="rgba(255,255,255,0.04)"
+            key={`v${t}`}
+            x1={toX(t)}
+            y1={PAD_TOP}
+            x2={toX(t)}
+            y2={PAD_TOP + scheduled.length * ROW_H}
+            stroke="#2a2a2a"
             strokeWidth={1}
           />
         ))}
 
-        {/* Líneas de hora completa */}
         {ticks.map(t => (
-          <line
-            key={`t${t}`}
-            x1={toX(t)} y1={PAD_TOP}
-            x2={toX(t)} y2={totalH - AXIS_H}
-            stroke="rgba(255,255,255,0.08)"
-            strokeWidth={1}
-          />
-        ))}
-
-        {/* Eje inferior */}
-        <line
-          x1={LABEL_W} y1={totalH - AXIS_H}
-          x2={LABEL_W + TL_W} y2={totalH - AXIS_H}
-          stroke="rgba(255,255,255,0.15)"
-          strokeWidth={1}
-        />
-
-        {/* Etiquetas del eje */}
-        {ticks.map(t => (
-          <g key={`label${t}`}>
+          <g key={`a${t}`}>
             <line
-              x1={toX(t)} y1={totalH - AXIS_H}
-              x2={toX(t)} y2={totalH - AXIS_H + 5}
-              stroke="rgba(255,255,255,0.2)"
+              x1={toX(t)}
+              y1={PAD_TOP + scheduled.length * ROW_H}
+              x2={toX(t)}
+              y2={PAD_TOP + scheduled.length * ROW_H + 6}
+              stroke="#555555"
               strokeWidth={1}
             />
             <text
-              x={toX(t)} y={totalH - 7}
+              x={toX(t)}
+              y={PAD_TOP + scheduled.length * ROW_H + 22}
               textAnchor="middle"
               fontSize={10}
-              fontFamily="var(--font-mono)"
-              fill="rgba(255,255,255,0.38)"
+              fontFamily="Segoe UI, var(--font-sans)"
+              fill="rgba(255,255,255,0.53)"
             >
-              {minToTime(t)}
+              {axisLabelMinToTime(t)}
             </text>
           </g>
         ))}
 
-        {/* Filas de empleados */}
+        <line
+          x1={dx + LABEL_W}
+          y1={PAD_TOP + scheduled.length * ROW_H}
+          x2={dx + LABEL_W + TL_W}
+          y2={PAD_TOP + scheduled.length * ROW_H}
+          stroke="#3a3a3a"
+          strokeWidth={1}
+        />
+
         {scheduled.map((emp, i) => {
-          const y       = PAD_TOP + i * (ROW_H + ROW_GAP);
-          const entryX  = toX(timeToMin(emp.entry));
-          const exitX   = toX(timeToMin(emp.exit));
-          const label   = emp.name.length > 18 ? emp.name.slice(0, 17) + '…' : emp.name;
-          const cy      = y + ROW_H / 2;
+          const y = PAD_TOP + i * (ROW_H + ROW_GAP);
+          const cy = y + ROW_H / 2;
+          const lbl = emp.name.length > 20 ? emp.name.slice(0, 19) + '…' : emp.name;
+          const ex = toX(timeToMin(emp.entry));
+          const sx = toX(timeToMin(emp.exit));
 
           return (
             <g key={emp.id}>
-              {/* Nombre */}
               <text
-                x={LABEL_W - 10}
+                x={dx + LABEL_W - 8}
                 y={cy + 4}
                 textAnchor="end"
-                fontSize={11.5}
+                fontSize={12}
                 fontFamily="var(--font-sans)"
-                fontWeight={emp.hasConflict ? '600' : '400'}
-                fill={emp.hasConflict ? 'var(--color-red)' : 'rgba(255,255,255,0.78)'}
+                fontWeight={400}
+                fill={emp.hasConflict ? '#e0505a' : 'rgba(255,255,255,0.91)'}
               >
-                {label}
+                {lbl}
               </text>
-
-              {/* Barra de turno */}
-              <rect
-                x={entryX} y={y + 10}
-                width={exitX - entryX} height={ROW_H - 20}
-                fill="rgba(255,255,255,0.06)"
-                rx={3}
-              />
-
-              {/* Offset badge si existe */}
               {emp.offset !== 0 && (
                 <text
-                  x={LABEL_W - 10}
-                  y={cy + 15}
+                  x={dx + LABEL_W - 8}
+                  y={cy + 16}
                   textAnchor="end"
                   fontSize={9}
                   fontFamily="var(--font-mono)"
-                  fill="var(--color-amber)"
+                  fill="#e09a30"
                 >
-                  {emp.offset > 0 ? `+${emp.offset}m` : `${emp.offset}m`}
+                  {emp.offset > 0 ? `+${emp.offset}` : emp.offset}m
                 </text>
               )}
-
-              {/* Bloques de descanso */}
+              <rect
+                x={ex}
+                y={y + ROW_H * 0.36}
+                width={Math.max(sx - ex, 2)}
+                height={ROW_H * 0.28}
+                fill="#282828"
+              />
               {emp.breaks.map((brk, j) => {
-                const bx = toX(brk.start);
-                const bw = Math.max(toX(brk.end) - bx, 3);
-                const by = y + 4;
-                const bh = ROW_H - 8;
-
+                const x1 = toX(brk.start);
+                const x2 = Math.max(toX(brk.end), x1 + 4);
+                const col = brk.conflict ? '#e0505a' : BREAK_COLORS[brk.type];
                 return (
                   <g key={j}>
                     <rect
-                      x={bx} y={by}
-                      width={bw} height={bh}
-                      fill={brk.conflict ? 'var(--color-red)' : BREAK_COLORS[brk.type]}
-                      opacity={brk.conflict ? 0.9 : 0.78}
-                      rx={3}
+                      x={x1}
+                      y={y + 4}
+                      width={x2 - x1}
+                      height={ROW_H - 8}
+                      fill={col}
                     />
-                    {bw > 22 && (
+                    {brk.conflict && (
+                      <rect
+                        x={x1}
+                        y={y + 4}
+                        width={x2 - x1}
+                        height={ROW_H - 8}
+                        fill="none"
+                        stroke="#e0505a"
+                        strokeWidth={2}
+                      />
+                    )}
+                    {x2 - x1 > 32 && (
                       <text
-                        x={bx + bw / 2} y={by + bh / 2 + 4}
+                        x={(x1 + x2) / 2}
+                        y={cy + 4}
                         textAnchor="middle"
-                        fontSize={9}
+                        fontSize={10}
+                        fontWeight={700}
                         fontFamily="var(--font-sans)"
-                        fontWeight="500"
-                        fill="rgba(0,0,0,0.72)"
+                        fill="#050505"
                       >
                         {brk.duration}m
                       </text>
@@ -200,372 +285,400 @@ function Timeline({ scheduled }: { scheduled: ScheduledEmployee[] }) {
   );
 }
 
-// ─── Componente principal ─────────────────────────────────────────────────────
-
 export default function App() {
-  const [employees, setEmployees]   = useState<Employee[]>(INITIAL_EMPLOYEES);
-  const [view, setView]             = useState<'table' | 'timeline'>('timeline');
-  const [editorOpen, setEditorOpen] = useState(true);
-  const [newName, setNewName]       = useState('');
-  const [newEntry, setNewEntry]     = useState('08:00');
-  const [newExit, setNewExit]       = useState('16:00');
-  const printRef = useRef<HTMLDivElement>(null);
+  const [employees, setEmployees] = useState<Employee[]>(INITIAL_EMPLOYEES);
+  const [newName, setNewName] = useState('');
+  const [newEntry, setNewEntry] = useState('08:00');
+  const [newExit, setNewExit] = useState('16:00');
+  const [fieldErr, setFieldErr] = useState<'name' | 'entry' | 'exit' | null>(null);
 
-  const scheduled   = generateSchedule(employees);
-  const conflicts   = scheduled.filter(e => e.hasConflict);
-  const totalBreak  = scheduled.reduce((s, e) => s + e.breaks.reduce((a, b) => a + b.duration, 0), 0);
-  const withBreaks  = scheduled.filter(e => e.breaks.length > 0).length;
+  const timelineHostRef = useRef<HTMLDivElement>(null);
+  const [timelineInnerW, setTimelineInnerW] = useState(900);
+  const captureWideRef = useRef<HTMLDivElement>(null);
+  const captureTableRef = useRef<HTMLDivElement>(null);
+
+  const scheduled = generateSchedule(employees);
+  const conflicts = scheduled.filter(e => e.hasConflict);
+  const withBreaks = scheduled.filter(e => e.breaks.length > 0).length;
+  const totalBreakMin = scheduled.reduce(
+    (s, e) => s + e.breaks.reduce((a, b) => a + b.duration, 0),
+    0,
+  );
+
+  const schedById = useCallback(
+    (id: string) => scheduled.find(s => s.id === id),
+    [scheduled],
+  );
+
+  useEffect(() => {
+    const el = timelineHostRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const w = el.clientWidth;
+      setTimelineInnerW(Math.max(w, 400));
+    });
+    ro.observe(el);
+    setTimelineInnerW(Math.max(el.clientWidth, 400));
+    return () => ro.disconnect();
+  }, []);
 
   const addEmployee = () => {
-    if (!newName.trim()) return;
+    const name = newName.trim();
+    const entry = newEntry.trim();
+    const exit = newExit.trim();
+
+    let err: 'name' | 'entry' | 'exit' | null = null;
+    if (!name) err = 'name';
+    else if (!validTime(entry)) err = 'entry';
+    else if (!validTime(exit)) err = 'exit';
+    else if (timeToMin(exit) <= timeToMin(entry)) {
+      err = 'exit';
+    }
+    setFieldErr(err);
+    if (err) return;
+
     setEmployees(prev => [
       ...prev,
-      { id: String(Date.now()), name: newName.trim(), entry: newEntry, exit: newExit, offset: 0 },
+      { id: String(Date.now()), name, entry, exit, offset: 0 },
     ]);
     setNewName('');
     setNewEntry('08:00');
     setNewExit('16:00');
+    setFieldErr(null);
   };
 
   const removeEmployee = (id: string) =>
     setEmployees(prev => prev.filter(e => e.id !== id));
 
-  const updateField = useCallback(
-    (id: string, field: keyof Employee, value: string | number) =>
-      setEmployees(prev => prev.map(e => e.id === id ? { ...e, [field]: value } : e)),
-    [],
-  );
-
   const nudgeOffset = (id: string, delta: number) =>
-    setEmployees(prev => prev.map(e =>
-      e.id === id
-        ? { ...e, offset: Math.max(-60, Math.min(120, e.offset + delta)) }
-        : e,
-    ));
+    setEmployees(prev =>
+      prev.map(e =>
+        e.id === id
+          ? { ...e, offset: Math.max(-60, Math.min(120, e.offset + delta)) }
+          : e,
+      ),
+    );
+
+  const exportCsv = () => {
+    downloadBlob(`horarios_${timestampForFile()}.csv`, 'text/csv;charset=utf-8', buildCsv(scheduled));
+  };
+
+  const pngOpts = {
+    pixelRatio: 2,
+    cacheBust: true,
+    filter: (node: Element) => !node.classList?.contains('no-screenshot'),
+  } as const;
+
+  const exportPng = async (node: HTMLElement | null, baseName: string) => {
+    if (!node || !scheduled.length) {
+      window.alert('Añade empleados con horario antes de exportar la imagen.');
+      return;
+    }
+    try {
+      const dataUrl = await toPng(node, { ...pngOpts });
+      const res = await fetch(dataUrl);
+      const blob = await res.blob();
+      downloadBlob(`${baseName}_${timestampForFile()}.png`, blob.type, blob);
+    } catch (e) {
+      console.error(e);
+      window.alert('No se pudo generar la imagen. Prueba otra vez o usa Imprimir.');
+    }
+  };
 
   const handlePrint = () => window.print();
 
-  // Construir filas de la tabla
-  type TableRow = { cells: string[]; conflict: boolean; isFirst: boolean };
-  const rows: TableRow[] = [];
-  for (const emp of scheduled) {
-    if (emp.breaks.length === 0) {
-      rows.push({ cells: [emp.name, emp.entry, emp.exit, 'Sin descanso', '—', '—', '—', '—'], conflict: false, isFirst: true });
-    } else {
-      emp.breaks.forEach((brk, i) => {
-        rows.push({
-          cells: [
-            i === 0 ? emp.name : '',
-            i === 0 ? emp.entry : '',
-            i === 0 ? emp.exit : '',
-            BREAK_LABEL[brk.type],
-            minToTime(brk.start),
-            minToTime(brk.end),
-            `${brk.duration} min`,
-            brk.conflict ? 'CONFLICTO' : 'OK',
-          ],
-          conflict: brk.conflict,
-          isFirst: i === 0,
-        });
-      });
+  type TRow = { zebra: boolean; conflict: boolean; cells: string[] };
+  const tableRows: TRow[] = [];
+  scheduled.forEach((emp, rowIdx) => {
+    let nombre = emp.name;
+    if (emp.offset !== 0) {
+      const sgn = emp.offset > 0 ? '+' : '';
+      nombre = `${emp.name} (${sgn}${emp.offset}m)`;
     }
-  }
+    const ent = emp.entry ? timeStrAmPm(emp.entry) : '—';
+    const sal = emp.exit ? timeStrAmPm(emp.exit) : '—';
+
+    if (!emp.breaks.length) {
+      tableRows.push({
+        zebra: rowIdx % 2 === 1,
+        conflict: emp.hasConflict,
+        cells: [nombre, ent, sal, '—', '—', '—', '—'],
+      });
+      return;
+    }
+    const s1 = slotByType(emp.breaks, 'silla1');
+    const bk = slotByType(emp.breaks, 'break');
+    const s2 = slotByType(emp.breaks, 'silla2');
+    tableRows.push({
+      zebra: rowIdx % 2 === 1,
+      conflict: emp.hasConflict,
+      cells: [
+        nombre,
+        ent,
+        sal,
+        formatSlotAmPm(s1),
+        bk ? formatSlotAmPm(bk) : '—',
+        formatSlotAmPm(s2),
+        emp.hasConflict ? 'CONFLICTO' : 'OK',
+      ],
+    });
+  });
+
+  const TABLE_HEADERS = [
+    'Empleado',
+    'Entrada',
+    'Salida',
+    'Ley Silla 1',
+    'Break',
+    'Ley Silla 2',
+    'Estado',
+  ] as const;
 
   return (
     <div className="app">
-      {/* ── Sidebar ────────────────────────────────────────────────────── */}
-      <aside className="sidebar">
-        <div className="sidebar-header">
-          <span className="sidebar-logo">HR</span>
-          <div>
-            <p className="sidebar-title">Horarios</p>
-            <p className="sidebar-sub">Generador</p>
-          </div>
-        </div>
-
-        <nav className="sidebar-nav">
-          <button
-            className={`nav-item ${view === 'timeline' ? 'active' : ''}`}
-            onClick={() => setView('timeline')}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <rect x="1" y="4" width="14" height="2.5" rx="1.25" fill="currentColor" opacity=".3"/>
-              <rect x="1" y="7.5" width="8" height="2.5" rx="1.25" fill="currentColor"/>
-              <rect x="1" y="11" width="11" height="2.5" rx="1.25" fill="currentColor" opacity=".6"/>
-            </svg>
-            Timeline
-          </button>
-          <button
-            className={`nav-item ${view === 'table' ? 'active' : ''}`}
-            onClick={() => setView('table')}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <rect x="1" y="1" width="14" height="2.5" rx="1" fill="currentColor" opacity=".4"/>
-              <rect x="1" y="5" width="14" height="8.5" rx="1" fill="none" stroke="currentColor" strokeOpacity=".5"/>
-              <line x1="1" y1="8.75" x2="15" y2="8.75" stroke="currentColor" strokeOpacity=".3"/>
-              <line x1="6" y1="5" x2="6" y2="13.5" stroke="currentColor" strokeOpacity=".3"/>
-            </svg>
-            Tabla
-          </button>
-        </nav>
-
-        <div className="sidebar-section">
-          <p className="sidebar-label">Métricas</p>
-          <div className="stat-list">
-            <div className="stat-item">
-              <span className="stat-value">{employees.length}</span>
-              <span className="stat-label">Empleados</span>
-            </div>
-            <div className="stat-item">
-              <span className="stat-value" style={{ color: 'var(--color-green)' }}>{withBreaks}</span>
-              <span className="stat-label">Con descansos</span>
-            </div>
-            <div className="stat-item">
-              <span
-                className="stat-value"
-                style={{ color: conflicts.length > 0 ? 'var(--color-red)' : undefined }}
-              >
-                {conflicts.length}
-              </span>
-              <span className="stat-label">Conflictos</span>
-            </div>
-            <div className="stat-item">
-              <span className="stat-value">{totalBreak}</span>
-              <span className="stat-label">Min. descanso</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="sidebar-section rules-section">
-          <p className="sidebar-label">Reglas</p>
-          <div className="rule-card">
-            <span className="rule-badge green">≥ 7 h</span>
-            <div className="rule-detail">
-              <span>S1 15 · Break 30 · S2 15</span>
-              <span className="rule-total">60 min</span>
-            </div>
-          </div>
-          <div className="rule-card">
-            <span className="rule-badge blue">≥ 6 h</span>
-            <div className="rule-detail">
-              <span>S1 12 · Break 20 · S2 12</span>
-              <span className="rule-total">44 min</span>
-            </div>
-          </div>
-          <div className="rule-card">
-            <span className="rule-badge amber">&gt; 5 h</span>
-            <div className="rule-detail">
-              <span>S1 10 · S2 10</span>
-              <span className="rule-total">20 min</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="sidebar-footer">
-          <button className="btn-print" onClick={handlePrint}>
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <rect x="2" y="1" width="10" height="7" rx="1" fill="none" stroke="currentColor"/>
-              <rect x="3" y="8" width="8" height="5" rx="1" fill="none" stroke="currentColor"/>
-              <line x1="4" y1="10.5" x2="10" y2="10.5" stroke="currentColor" strokeOpacity=".6"/>
-              <line x1="4" y1="12" x2="8" y2="12" stroke="currentColor" strokeOpacity=".4"/>
-            </svg>
-            Exportar / Imprimir
-          </button>
-        </div>
-      </aside>
-
-      {/* ── Main content ───────────────────────────────────────────────── */}
-      <main className="main" ref={printRef}>
-
-        {/* Header */}
-        <header className="main-header">
-          <div>
-            <h1 className="main-title">Generador de Horarios de Descanso</h1>
-            <p className="main-sub">
-              Algoritmo de no-traslape · Priority Queue · Detección de conflictos automática
+      <header className="app-header">
+        <div className="header-brand">
+          <span className="header-logo">HR</span>
+          <div className="header-titles">
+            <h1 className="header-title">Generador de Horarios de Descanso</h1>
+            <p className="header-sub">
+              Algoritmo de no-traslape &nbsp;|&nbsp; Priority Queue &nbsp;|&nbsp; Detección de conflictos
             </p>
           </div>
-          <div className="header-actions">
-            <div className="legend">
-              {(['silla1', 'break', 'silla2'] as BreakType[]).map(t => (
-                <div key={t} className="legend-item">
-                  <span className="legend-dot" style={{ background: BREAK_COLORS[t] }} />
-                  <span>{BREAK_LABEL[t]}</span>
-                </div>
-              ))}
-              <div className="legend-item">
-                <span className="legend-dot conflict-dot" />
-                <span>Conflicto</span>
-              </div>
-            </div>
+        </div>
+        <div className="header-stats no-screenshot">
+          <div className="stat-box">
+            <span className="stat-box-val">{employees.length}</span>
+            <span className="stat-box-lbl">Empleados</span>
           </div>
-        </header>
-
-        {/* Alert de conflictos */}
-        {conflicts.length > 0 && (
-          <div className="alert-conflict">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path d="M8 1.5L14.5 13H1.5L8 1.5Z" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-              <line x1="8" y1="6" x2="8" y2="9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              <circle cx="8" cy="11.5" r=".75" fill="currentColor"/>
-            </svg>
-            <div>
-              <strong>Descansos fuera de turno:</strong>{' '}
-              {conflicts.map(e => e.name).join(', ')}.
-              Ajusta el offset o redistribuye los turnos.
-            </div>
+          <div className="stat-box">
+            <span className="stat-box-val stat-box-val--green">{withBreaks}</span>
+            <span className="stat-box-lbl">Con descansos</span>
           </div>
-        )}
-
-        {/* ── Editor de empleados ─────────────────────────────────── */}
-        <section className="section">
-          <button
-            className="section-toggle"
-            onClick={() => setEditorOpen(o => !o)}
-          >
-            <svg
-              width="12" height="12" viewBox="0 0 12 12" fill="none"
-              style={{ transform: editorOpen ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform .2s' }}
+          <div className="stat-box">
+            <span
+              className={`stat-box-val ${conflicts.length ? 'stat-box-val--red' : ''}`}
             >
-              <path d="M4 2l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            Empleados
-            <span className="badge">{employees.length}</span>
-          </button>
+              {conflicts.length}
+            </span>
+            <span className="stat-box-lbl">Conflictos</span>
+          </div>
+          <div className="stat-box">
+            <span className="stat-box-val">{totalBreakMin}</span>
+            <span className="stat-box-lbl">Min. asignados</span>
+          </div>
+        </div>
+      </header>
 
-          {editorOpen && (
-            <div className="editor-body">
-              <div className="editor-grid-header">
-                <span>Nombre</span>
-                <span>Entrada</span>
-                <span>Salida</span>
-                <span>Offset</span>
-                <span></span>
-              </div>
-
-              {employees.map(emp => (
-                <div key={emp.id} className="editor-row">
-                  <input
-                    className="inp"
-                    value={emp.name}
-                    onChange={e => updateField(emp.id, 'name', e.target.value)}
-                    placeholder="Nombre…"
-                  />
-                  <input
-                    className="inp inp-time"
-                    value={emp.entry}
-                    onChange={e => updateField(emp.id, 'entry', e.target.value)}
-                    placeholder="08:00"
-                  />
-                  <input
-                    className="inp inp-time"
-                    value={emp.exit}
-                    onChange={e => updateField(emp.id, 'exit', e.target.value)}
-                    placeholder="16:00"
-                  />
-                  <div className="offset-ctrl">
-                    <button className="offset-btn" onClick={() => nudgeOffset(emp.id, -5)}>−</button>
-                    <span
-                      className="offset-val"
-                      style={{ color: emp.offset !== 0 ? 'var(--color-amber)' : undefined }}
-                    >
-                      {emp.offset > 0 ? `+${emp.offset}` : emp.offset}m
-                    </span>
-                    <button className="offset-btn" onClick={() => nudgeOffset(emp.id, 5)}>+</button>
-                  </div>
-                  <button className="btn-remove" onClick={() => removeEmployee(emp.id)} title="Eliminar">
-                    ✕
-                  </button>
-                </div>
-              ))}
-
-              <div className="editor-row add-row">
-                <input
-                  className="inp"
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  placeholder="Nuevo empleado…"
-                  onKeyDown={e => e.key === 'Enter' && addEmployee()}
-                />
-                <input
-                  className="inp inp-time"
-                  value={newEntry}
-                  onChange={e => setNewEntry(e.target.value)}
-                  placeholder="08:00"
-                />
-                <input
-                  className="inp inp-time"
-                  value={newExit}
-                  onChange={e => setNewExit(e.target.value)}
-                  placeholder="16:00"
-                />
-                <div />
-                <button
-                  className="btn-add"
-                  onClick={addEmployee}
-                  disabled={!newName.trim()}
+      <div className="app-body">
+        <aside className="left-panel no-screenshot">
+          <div className="left-form">
+            <p className="left-section-label">NUEVO EMPLEADO</p>
+            <input
+              className={`left-inp ${fieldErr === 'name' ? 'left-inp--err' : ''}`}
+              placeholder="Nombre completo"
+              value={newName}
+              onChange={e => {
+                setNewName(e.target.value);
+                setFieldErr(null);
+              }}
+              onKeyDown={e => e.key === 'Enter' && addEmployee()}
+            />
+            <input
+              className={`left-inp mono ${fieldErr === 'entry' ? 'left-inp--err' : ''}`}
+              placeholder="Entrada  (08:00)"
+              value={newEntry}
+              onChange={e => {
+                setNewEntry(e.target.value);
+                setFieldErr(null);
+              }}
+              onKeyDown={e => e.key === 'Enter' && addEmployee()}
+            />
+            <input
+              className={`left-inp mono ${fieldErr === 'exit' ? 'left-inp--err' : ''}`}
+              placeholder="Salida   (16:00)"
+              value={newExit}
+              onChange={e => {
+                setNewExit(e.target.value);
+                setFieldErr(null);
+              }}
+              onKeyDown={e => e.key === 'Enter' && addEmployee()}
+            />
+            <button type="button" className="btn-add-emp" onClick={addEmployee}>
+              + Agregar empleado
+            </button>
+          </div>
+          <div className="left-divider" />
+          <div className="left-list-head">
+            <span className="left-section-label left-section-label--inline">EMPLEADOS</span>
+            <span className="left-count">{employees.length}</span>
+          </div>
+          <div className="left-list-scroll">
+            {employees.map(emp => {
+              const s = schedById(emp.id);
+              const conflict = s?.hasConflict ?? false;
+              return (
+                <div
+                  key={emp.id}
+                  className={`emp-card ${conflict ? 'emp-card--conflict' : ''}`}
                 >
-                  + Agregar
+                  <div className="emp-card-row0">
+                    <span className={`emp-name ${conflict ? 'emp-name--conflict' : ''}`}>
+                      {emp.name.length > 22 ? emp.name.slice(0, 21) + '…' : emp.name}
+                    </span>
+                    <button
+                      type="button"
+                      className="emp-remove"
+                      title="Eliminar"
+                      onClick={() => removeEmployee(emp.id)}
+                    >
+                      X
+                    </button>
+                  </div>
+                  <div className="emp-shift mono">
+                    {formatShiftLine(
+                      emp.entry,
+                      emp.exit,
+                      (timeToMin(emp.exit) - timeToMin(emp.entry)) / 60,
+                    )}
+                  </div>
+                  <div className="emp-offset-row">
+                    <span className="emp-offset-lbl">Offset:</span>
+                    <button type="button" className="emp-off-btn" onClick={() => nudgeOffset(emp.id, -5)}>
+                      −
+                    </button>
+                    <span
+                      className={`emp-off-val mono ${emp.offset !== 0 ? 'emp-off-val--amber' : ''}`}
+                    >
+                      {emp.offset > 0 ? '+' : ''}{emp.offset} m
+                    </span>
+                    <button type="button" className="emp-off-btn" onClick={() => nudgeOffset(emp.id, 5)}>
+                      +
+                    </button>
+                  </div>
+                  {s?.breaks.map((brk, bi) => (
+                    <div
+                      key={bi}
+                      className="emp-brk-preview mono"
+                      style={{ color: brk.conflict ? '#e0505a' : BREAK_COLORS[brk.type] }}
+                    >
+                      &nbsp;&nbsp;{BREAK_LABEL[brk.type]} {formatSlotAmPm(brk)}
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+
+        <main className="right-panel">
+          {conflicts.length > 0 && (
+            <div className="alert-bar">
+              <strong>Descanso fuera de turno:</strong>{' '}
+              {conflicts.map(e => e.name).join(', ')}
+              {'  ·  '}Ajusta el offset desde la lista
+            </div>
+          )}
+
+          <div ref={captureWideRef} className="capture-wide">
+            <div className="schedule-block-head">
+              <h2 className="block-title">Horario Generado</h2>
+              <div className="export-btns">
+                <button type="button" className="btn-exp btn-exp--muted" onClick={exportCsv}>
+                  Exportar CSV
+                </button>
+                <button
+                  type="button"
+                  className="btn-exp btn-exp--blue"
+                  onClick={() => exportPng(captureWideRef.current, 'horarios_pc')}
+                >
+                  Imagen PC / HD
+                </button>
+                <button
+                  type="button"
+                  className="btn-exp btn-exp--green"
+                  onClick={() => exportPng(captureTableRef.current, 'horarios_tabla_movil')}
+                >
+                  Tabla · teléfono
+                </button>
+                <button
+                  type="button"
+                  className="btn-exp btn-exp--wa"
+                  onClick={() => exportPng(captureWideRef.current, 'horarios_whatsapp')}
+                >
+                  Imagen WhatsApp
                 </button>
               </div>
             </div>
-          )}
-        </section>
 
-        {/* ── Vista principal ─────────────────────────────────────── */}
-        <section className="section section-main">
-          {view === 'timeline' ? (
-            <>
-              <div className="section-title">
-                <h2>Timeline de Descansos</h2>
-                <p className="section-hint">Sin bloques superpuestos = cero traslapes garantizados</p>
+            <div ref={captureTableRef} className="table-outer">
+              <div className="table-accent-top" />
+              <div className="table-head-grid">
+                {TABLE_HEADERS.map((h, i) => (
+                  <div key={h} className={`th-cell th-c${i}`}>
+                    {h}
+                  </div>
+                ))}
               </div>
-              <Timeline scheduled={scheduled} />
-            </>
-          ) : (
-            <>
-              <div className="section-title">
-                <h2>Horario Generado</h2>
+              <div className="table-accent-bot" />
+              <div className="table-body-scroll">
+                {tableRows.map((row, ri) => (
+                  <div key={ri} className="gui-table-row">
+                    {row.cells.map((cell, ci) => {
+                      const est =
+                        ci === 6
+                          ? row.conflict
+                            ? 'est-bad'
+                            : cell === 'OK'
+                              ? 'est-ok'
+                              : 'est-muted'
+                          : '';
+                      return (
+                        <div
+                          key={ci}
+                          className={[
+                            'gui-td',
+                            `col-${ci}`,
+                            row.zebra ? 'zebra-alt' : '',
+                            row.conflict ? 'row-conflict' : '',
+                            est,
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}
+                        >
+                          {cell}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
               </div>
-              <div className="table-wrap">
-                <table className="schedule-table">
-                  <thead>
-                    <tr>
-                      <th>Empleado</th>
-                      <th>Entrada</th>
-                      <th>Salida</th>
-                      <th>Descanso</th>
-                      <th>Inicio</th>
-                      <th>Fin</th>
-                      <th className="right">Duración</th>
-                      <th className="center">Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row, i) => (
-                      <tr key={i} className={row.conflict ? 'row-conflict' : row.isFirst ? 'row-first' : ''}>
-                        {row.cells.map((cell, j) => (
-                          <td
-                            key={j}
-                            className={
-                              j === 6 ? 'right mono' :
-                              j === 7 ? `center status-cell ${row.conflict ? 'status-conflict' : 'status-ok'}` :
-                              j === 3 ? `break-type break-${row.cells[3]?.toLowerCase().replace(' ', '')}` :
-                              j >= 4 && j <= 5 ? 'mono' : ''
-                            }
-                          >
-                            {cell}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            </div>
+
+            <div className="timeline-block-head">
+              <h2 className="block-title">Timeline de Descansos</h2>
+              <div className="timeline-legend">
+                {(['silla1', 'break', 'silla2'] as BreakType[]).map(t => (
+                  <div key={t} className="tl-leg-item">
+                    <span className="tl-dot" style={{ background: BREAK_COLORS[t] }} />
+                    <span>{BREAK_LABEL[t]}</span>
+                  </div>
+                ))}
               </div>
-            </>
-          )}
-        </section>
-      </main>
+            </div>
+
+            <div ref={timelineHostRef} className="timeline-host">
+              <Timeline scheduled={scheduled} widthAvail={timelineInnerW} />
+            </div>
+          </div>
+
+          <div className="print-footer no-screenshot">
+            <button type="button" className="btn-print-bottom" onClick={handlePrint}>
+              Imprimir / PDF
+            </button>
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
