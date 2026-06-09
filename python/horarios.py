@@ -106,16 +106,52 @@ def get_durations(shift_hours: float) -> Optional[dict]:
     return None
 
 
+def shift_bounds(entry: str, exit_: str) -> tuple:
+    """Retorna (em, xm, sh) normalizando turnos que cruzan medianoche.
+    Si xm == em, sh=0 (se usa para rechazar turnos de duración cero)."""
+    em = time_to_min(entry)
+    xm = time_to_min(exit_)
+    if xm < em:
+        xm += 1440
+    return em, xm, (xm - em) / 60
+
+
+def _find_slot(earliest: int, latest: int, preferred: int, duration: int,
+               occupied: list, *, forward_first: bool = False) -> Optional[int]:
+    """Slot libre más cercano a `preferred`.
+    forward_first=True: busca hacia adelante primero (breaks, el 2° emp queda después).
+    forward_first=False: busca hacia atrás primero (Silla2, el 2° emp queda antes)."""
+    def is_free(s: int) -> bool:
+        e = s + duration
+        return all(e <= oc_s or s >= oc_e for oc_s, oc_e in occupied)
+    if forward_first:
+        s = preferred
+        while s <= latest:
+            if is_free(s): return s
+            s += 5
+        s = preferred - 5
+        while s >= earliest:
+            if is_free(s): return s
+            s -= 5
+    else:
+        s = preferred
+        while s >= earliest:
+            if is_free(s): return s
+            s -= 5
+        s = preferred + 5
+        while s <= latest:
+            if is_free(s): return s
+            s += 5
+    return None
+
+
 def generate_schedule(employees: list[Employee]) -> list[ScheduledEmployee]:
     """
     Fases globales de asignación (sin traslapes):
 
       Fase 1 — Ley Silla 1 para TODOS los empleados (emp1 → empN)
       Fase 2 — Break        para todos con jornada >= 6 h (emp1 → empN)
-      Fase 3 — Ley Silla 2  para TODOS los empleados (emp1 → empN)
-
-    Dentro de cada fase, global_busy_until garantiza que ningún
-    descanso se traslape con el anterior.
+      Fase 3 — Ley Silla 2  por ventana legal ~75 min antes de salida, sin cola global
     """
     sorted_emps = sorted(employees, key=lambda e: time_to_min(e.entry))
     n = len(sorted_emps)
@@ -127,9 +163,7 @@ def generate_schedule(employees: list[Employee]) -> list[ScheduledEmployee]:
     has_break:  list[bool] = [False] * n
 
     for emp in sorted_emps:
-        em = time_to_min(emp.entry)
-        xm = time_to_min(emp.exit)
-        sh = (xm - em) / 60
+        em, xm, sh = shift_bounds(emp.entry, emp.exit)
         emp_data.append((emp, em, xm, sh, get_durations(sh)))
 
     busy = 0
@@ -145,35 +179,75 @@ def generate_schedule(employees: list[Employee]) -> list[ScheduledEmployee]:
         s1_ends[i] = s1e
 
     # ── Fase 2: Break (solo jornadas >= 6 h) ──────────────────────────
-    # Centro de la jornada: el break busca ubicarse lo más cercano posible al
-    # medio del turno, sin violar recurso global ni el fin de Silla 1.
+    # Regla: Break solo evita traslapes con:
+    #   - Silla 1 de empleados con la MISMA hora de entrada o anterior
+    #   - Breaks ya asignados (nadie puede coincidir en almuerzo)
+    # Se permite cruzar con Silla1 de empleados que entran DESPUÉS.
+    silla1_occ_ph2: dict[int, tuple[int, int]] = {}
+    for k in range(n):
+        s1_slot = next((b for b in breaks_map[k] if b.type == "silla1"), None)
+        if s1_slot:
+            silla1_occ_ph2[k] = (s1_slot.start, s1_slot.end)
+
+    br_assigned: list[tuple[int, int]] = []
     for i, (emp, em, xm, sh, dur) in enumerate(emp_data):
         if not dur or sh <= 0 or dur["br"] is None:
             continue
-        br_len = dur["br"]
-        earliest = max(s1_ends[i], busy)
-        latest = xm - br_len
-        if earliest > latest:
-            bs = earliest
-        else:
-            mid = em + (xm - em) // 2
-            ideal = mid - br_len // 2
-            bs = max(earliest, min(ideal, latest))
-        be = bs + br_len
+        br_len   = dur["br"]
+        occupied = list(br_assigned)
+        for k, s1_iv in silla1_occ_ph2.items():
+            if emp_data[k][1] <= em:
+                occupied.append(s1_iv)
+        earliest  = s1_ends[i]
+        latest    = xm - br_len
+        mid       = em + (xm - em) // 2
+        ideal     = mid - br_len // 2
+        preferred = max(earliest, min(ideal, latest))
+        slot = _find_slot(earliest, latest, preferred, br_len, occupied, forward_first=True)
+        bs   = slot if slot is not None else earliest
+        be   = bs + br_len
         breaks_map[i].append(BreakSlot("break", bs, be, br_len, be > xm))
-        busy        = be
         br_ends[i]  = be
         has_break[i] = True
+        br_assigned.append((bs, be))
 
-    # ── Fase 3: Ley Silla 2 ───────────────────────────────────────────
-    for i, (emp, em, xm, sh, dur) in enumerate(emp_data):
+    # ── Fase 3: Ley Silla 2 (objetivo: ~75 min antes de salida) ───────
+    # Silla 2 solo evita traslapes con Silla1 de todos, Silla2 ya asignadas,
+    # y breaks de empleados con la misma hora de entrada o anterior.
+    # Se permite cruzar con breaks de empleados que entran DESPUÉS.
+    silla1_occ: list[tuple[int, int]] = [
+        (b.start, b.end) for lst in breaks_map for b in lst if b.type == "silla1"
+    ]
+    break_occ_by_idx: dict[int, tuple[int, int]] = {}
+    for k in range(n):
+        brk_slot = next((b for b in breaks_map[k] if b.type == "break"), None)
+        if brk_slot:
+            break_occ_by_idx[k] = (brk_slot.start, brk_slot.end)
+
+    s2_assigned: list[tuple[int, int]] = []
+    phase3_order = sorted(range(n), key=lambda i: (emp_data[i][2] - 75, -i))
+    for i in phase3_order:
+        emp, em, xm, sh, dur = emp_data[i]
         if not dur or sh <= 0:
             continue
-        prev = br_ends[i] if has_break[i] else s1_ends[i]
-        s2s  = max(prev, busy)
-        s2e  = s2s + dur["s2"]
-        breaks_map[i].append(BreakSlot("silla2", s2s, s2e, dur["s2"], s2e > xm))
-        busy = s2e
+        occupied = list(silla1_occ) + list(s2_assigned)
+        for k, brk_interval in break_occ_by_idx.items():
+            if emp_data[k][1] <= em:
+                occupied.append(brk_interval)
+        prev      = br_ends[i] if has_break[i] else s1_ends[i]
+        earliest  = prev
+        latest    = xm - dur["s2"]
+        ideal     = xm - 75
+        preferred = max(earliest, min(ideal, latest))
+        slot = _find_slot(earliest, latest, preferred, dur["s2"], occupied)
+        if slot is None:
+            s2s, conflict = earliest, True
+        else:
+            s2s     = slot
+            conflict = s2s + dur["s2"] > xm
+        s2e = s2s + dur["s2"]
+        breaks_map[i].append(BreakSlot("silla2", s2s, s2e, dur["s2"], conflict))
+        s2_assigned.append((s2s, s2e))
 
     result: list[ScheduledEmployee] = []
     for i, (emp, em, xm, sh, _) in enumerate(emp_data):
@@ -260,8 +334,8 @@ def input_employees(existing: list[Employee] | None = None) -> list[Employee]:
         entry = ask_time("  Entrada (HH:MM)", default="08:00")
         exit_ = ask_time("  Salida  (HH:MM)", default="16:00")
 
-        if time_to_min(exit_) <= time_to_min(entry):
-            console.print("  [yellow]La salida debe ser posterior a la entrada.[/yellow]\n")
+        if shift_bounds(entry, exit_)[2] <= 0:
+            console.print("  [yellow]La hora de salida debe ser diferente a la entrada.[/yellow]\n")
             continue
 
         employees.append(Employee(name=name.strip(), entry=entry, exit=exit_))
@@ -292,7 +366,7 @@ def render_schedule(scheduled: list[ScheduledEmployee]) -> None:
     table.add_column("Inicio",    min_width=7,          justify="center")
     table.add_column("Fin",       min_width=7,          justify="center")
     table.add_column("Dur.",      min_width=5,          justify="right")
-    table.add_column("Estado",    min_width=10,         justify="center")
+    table.add_column("Horas",     min_width=7,          justify="center")
 
     conflicts: list[str] = []
 
@@ -307,10 +381,10 @@ def render_schedule(scheduled: list[ScheduledEmployee]) -> None:
             continue
 
         for i, brk in enumerate(emp.breaks):
-            name_cell   = emp.name if i == 0 else ""
-            entry_cell  = emp.entry if i == 0 else ""
-            exit_cell   = emp.exit if i == 0 else ""
-            shift_cell  = shift_str if i == 0 else ""
+            name_cell  = emp.name if i == 0 else ""
+            entry_cell = emp.entry if i == 0 else ""
+            exit_cell  = emp.exit  if i == 0 else ""
+            shift_cell = shift_str if i == 0 else ""
 
             label = Text(BREAK_LABELS[brk.type], style=BREAK_COLORS[brk.type])
             start = Text(min_to_time(brk.start), style="white")
@@ -318,14 +392,11 @@ def render_schedule(scheduled: list[ScheduledEmployee]) -> None:
             dur   = Text(f"{brk.duration} m",    style="dim")
 
             if brk.conflict:
-                status = Text("CONFLICTO", style=C_RED)
-                start  = Text(min_to_time(brk.start), style=C_RED)
-                end    = Text(min_to_time(brk.end),   style=C_RED)
-                dur    = Text(f"{brk.duration} m",    style=C_RED)
+                start = Text(min_to_time(brk.start), style=C_RED)
+                end   = Text(min_to_time(brk.end),   style=C_RED)
+                dur   = Text(f"{brk.duration} m",    style=C_RED)
                 if emp.name not in conflicts:
                     conflicts.append(emp.name)
-            else:
-                status = Text("OK", style=C_GREEN)
 
             offset_hint = ""
             if i == 0 and emp.offset != 0:
@@ -335,7 +406,7 @@ def render_schedule(scheduled: list[ScheduledEmployee]) -> None:
             table.add_row(
                 name_cell + offset_hint,
                 entry_cell, exit_cell, shift_cell,
-                label, start, end, dur, status,
+                label, start, end, dur, shift_cell,
                 end_section=(i == len(emp.breaks) - 1),
             )
 
@@ -359,7 +430,8 @@ def render_timeline(scheduled: list[ScheduledEmployee]) -> None:
 
     all_times = []
     for e in scheduled:
-        all_times += [time_to_min(e.entry), time_to_min(e.exit)]
+        em_t, xm_t, _ = shift_bounds(e.entry, e.exit)
+        all_times += [em_t, xm_t]
         for b in e.breaks:
             all_times += [b.start, b.end]
 
@@ -382,8 +454,8 @@ def render_timeline(scheduled: list[ScheduledEmployee]) -> None:
     for emp in scheduled:
         # Construir barra de turno
         bar = list(" " * (width + 2))
-        entry_col = to_col(time_to_min(emp.entry))
-        exit_col  = to_col(time_to_min(emp.exit))
+        entry_col = to_col(shift_bounds(emp.entry, emp.exit)[0])
+        exit_col  = to_col(shift_bounds(emp.entry, emp.exit)[1])
         for c in range(entry_col, min(exit_col, width)):
             bar[c] = "─"
 
@@ -477,18 +549,19 @@ def export_csv(scheduled: list[ScheduledEmployee]) -> None:
     with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow(["Empleado", "Entrada", "Salida", "Jornada (h)",
-                         "Descanso", "Inicio", "Fin", "Duración (min)", "Estado"])
+                         "Descanso", "Inicio", "Fin", "Duración (min)", "Horas"])
         for emp in scheduled:
+            sh_str = f"{emp.shift_hours:.1f}"
             if not emp.breaks:
                 writer.writerow([emp.name, emp.entry, emp.exit,
-                                  f"{emp.shift_hours:.1f}", "Sin descanso", "", "", "", ""])
+                                  sh_str, "Sin descanso", "", "", "", sh_str])
             for brk in emp.breaks:
                 writer.writerow([
-                    emp.name, emp.entry, emp.exit, f"{emp.shift_hours:.1f}",
+                    emp.name, emp.entry, emp.exit, sh_str,
                     BREAK_LABELS[brk.type].strip(),
                     min_to_time(brk.start), min_to_time(brk.end),
                     brk.duration,
-                    "CONFLICTO" if brk.conflict else "OK",
+                    sh_str,
                 ])
 
     console.print(f"\n  [#3fa266]✓ Exportado:[/] [dim]{filepath}[/dim]")

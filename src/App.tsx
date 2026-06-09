@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toPng } from 'html-to-image';
-import { generateSchedule, timeToMin } from './algorithm';
+import { generateSchedule, shiftBounds } from './algorithm';
 import type { BreakSlot, BreakType, Employee, ScheduledEmployee } from './types';
 import { BREAK_LABEL } from './types';
 import {
@@ -41,7 +41,7 @@ function buildCsv(scheduled: ScheduledEmployee[]): string {
       'Ley Silla 1',
       'Break',
       'Ley Silla 2',
-      'Estado',
+      'Horas',
     ].map(escapeCsvCell).join(','),
   ];
 
@@ -59,7 +59,7 @@ function buildCsv(scheduled: ScheduledEmployee[]): string {
           '',
           '',
           '',
-          'Sin descanso',
+          emp.shiftHours.toFixed(1) + ' h',
         ].map(escapeCsvCell).join(','),
       );
       continue;
@@ -77,7 +77,7 @@ function buildCsv(scheduled: ScheduledEmployee[]): string {
         formatSlotAmPm(s1),
         bk ? formatSlotAmPm(bk) : '—',
         formatSlotAmPm(s2),
-        emp.hasConflict ? 'CONFLICTO' : 'OK',
+        emp.shiftHours.toFixed(1) + ' h',
       ].map(escapeCsvCell).join(','),
     );
   }
@@ -105,11 +105,10 @@ type TimelineProps = { scheduled: ScheduledEmployee[]; widthAvail: number };
 function Timeline({ scheduled, widthAvail }: TimelineProps) {
   if (scheduled.length === 0) return null;
 
-  const all = scheduled.flatMap(e => [
-    timeToMin(e.entry),
-    timeToMin(e.exit),
-    ...e.breaks.flatMap(b => [b.start, b.end]),
-  ]);
+  const all = scheduled.flatMap(e => {
+    const [em, xm] = shiftBounds(e.entry, e.exit);
+    return [em, xm, ...e.breaks.flatMap(b => [b.start, b.end])];
+  });
   const minT = Math.min(...all);
   const maxT = Math.max(...all);
   const range = Math.max(maxT - minT, 60);
@@ -202,8 +201,9 @@ function Timeline({ scheduled, widthAvail }: TimelineProps) {
           const y = PAD_TOP + i * (ROW_H + ROW_GAP);
           const cy = y + ROW_H / 2;
           const lbl = emp.name.length > 20 ? emp.name.slice(0, 19) + '…' : emp.name;
-          const ex = toX(timeToMin(emp.entry));
-          const sx = toX(timeToMin(emp.exit));
+          const [emPx, xmPx] = shiftBounds(emp.entry, emp.exit);
+          const ex = toX(emPx);
+          const sx = toX(xmPx);
 
           return (
             <g key={emp.id}>
@@ -331,7 +331,7 @@ export default function App() {
     if (!name) err = 'name';
     else if (!validTime(entry)) err = 'entry';
     else if (!validTime(exit)) err = 'exit';
-    else if (timeToMin(exit) <= timeToMin(entry)) {
+    else if (shiftBounds(entry, exit)[2] <= 0) {
       err = 'exit';
     }
     setFieldErr(err);
@@ -402,7 +402,7 @@ export default function App() {
       tableRows.push({
         zebra: rowIdx % 2 === 1,
         conflict: emp.hasConflict,
-        cells: [nombre, ent, sal, '—', '—', '—', '—'],
+        cells: [nombre, ent, sal, '—', '—', '—', emp.shiftHours.toFixed(1) + ' h'],
       });
       return;
     }
@@ -419,7 +419,7 @@ export default function App() {
         formatSlotAmPm(s1),
         bk ? formatSlotAmPm(bk) : '—',
         formatSlotAmPm(s2),
-        emp.hasConflict ? 'CONFLICTO' : 'OK',
+        emp.shiftHours.toFixed(1) + ' h',
       ],
     });
   });
@@ -431,7 +431,7 @@ export default function App() {
     'Ley Silla 1',
     'Break',
     'Ley Silla 2',
-    'Estado',
+    'Horas',
   ] as const;
 
   return (
@@ -539,7 +539,7 @@ export default function App() {
                     {formatShiftLine(
                       emp.entry,
                       emp.exit,
-                      (timeToMin(emp.exit) - timeToMin(emp.entry)) / 60,
+                      shiftBounds(emp.entry, emp.exit)[2],
                     )}
                   </div>
                   <div className="emp-offset-row">
@@ -625,14 +625,7 @@ export default function App() {
                 {tableRows.map((row, ri) => (
                   <div key={ri} className="gui-table-row">
                     {row.cells.map((cell, ci) => {
-                      const est =
-                        ci === 6
-                          ? row.conflict
-                            ? 'est-bad'
-                            : cell === 'OK'
-                              ? 'est-ok'
-                              : 'est-muted'
-                          : '';
+                      const est = ci === 6 && row.conflict ? 'est-bad' : '';
                       return (
                         <div
                           key={ci}

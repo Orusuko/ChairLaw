@@ -417,7 +417,7 @@ html, body, #root {
 
 .table-head-grid {
   display: grid;
-  grid-template-columns: minmax(110px, 1.1fr) 72px 72px 148px 148px 148px 68px;
+  grid-template-columns: minmax(110px, 1.1fr) 72px 72px 162px 162px 162px 68px;
   gap: 2px;
   background: var(--tbl-head);
   padding: 6px 6px 10px;
@@ -443,7 +443,7 @@ html, body, #root {
 
 .gui-table-row {
   display: grid;
-  grid-template-columns: minmax(110px, 1.1fr) 72px 72px 148px 148px 148px 68px;
+  grid-template-columns: minmax(110px, 1.1fr) 72px 72px 162px 162px 162px 68px;
   gap: 2px;
   margin-bottom: 3px;
 }

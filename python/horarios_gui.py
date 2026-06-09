@@ -87,27 +87,61 @@ def get_durations(sh: float):
     if sh > 5:  return {"s1": 10, "br": None, "s2": 10}
     return None
 
+def shift_bounds(entry: str, exit_: str) -> tuple:
+    """Retorna (em, xm, sh) normalizando turnos que cruzan medianoche.
+    Si xm == em, sh=0 (se usa para rechazar turnos de duración cero)."""
+    em = time_to_min(entry)
+    xm = time_to_min(exit_)
+    if xm < em:
+        xm += 1440
+    return em, xm, (xm - em) / 60
+
+def _find_slot(earliest: int, latest: int, preferred: int, duration: int,
+               occupied: list, *, forward_first: bool = False) -> int | None:
+    """Slot libre más cercano a `preferred`.
+    forward_first=True: busca hacia adelante primero (para breaks, el 2° emp queda después).
+    forward_first=False: busca hacia atrás primero (para Silla2, el 2° emp queda antes)."""
+    def is_free(s: int) -> bool:
+        e = s + duration
+        return all(e <= oc_s or s >= oc_e for oc_s, oc_e in occupied)
+    if forward_first:
+        s = preferred
+        while s <= latest:
+            if is_free(s): return s
+            s += 5
+        s = preferred - 5
+        while s >= earliest:
+            if is_free(s): return s
+            s -= 5
+    else:
+        s = preferred
+        while s >= earliest:
+            if is_free(s): return s
+            s -= 5
+        s = preferred + 5
+        while s <= latest:
+            if is_free(s): return s
+            s += 5
+    return None
+
 def generate_schedule(employees):
     """
     Fases globales de asignación:
       Fase 1 — Silla 1 para TODOS los empleados (emp1 → empN)
       Fase 2 — Break    para todos los de jornada >= 6 h (emp1 → empN)
-      Fase 3 — Silla 2  para TODOS los empleados (emp1 → empN)
-    Dentro de cada fase se respeta global_busy_until para evitar traslapes.
+      Fase 3 — Silla 2  por ventana legal ~75 min antes de salida, sin cola global
     """
     sorted_emps = sorted(employees, key=lambda e: time_to_min(e.entry))
     n = len(sorted_emps)
 
     emp_data   = []
     breaks_map = [[] for _ in range(n)]
-    s1_ends    = [0] * n   # fin de Silla 1 de cada empleado
-    br_ends    = [0] * n   # fin de Break  de cada empleado
+    s1_ends    = [0] * n
+    br_ends    = [0] * n
     has_break  = [False] * n
 
     for emp in sorted_emps:
-        em  = time_to_min(emp.entry)
-        xm  = time_to_min(emp.exit)
-        sh  = (xm - em) / 60
+        em, xm, sh = shift_bounds(emp.entry, emp.exit)
         emp_data.append((emp, em, xm, sh, get_durations(sh)))
 
     busy = 0
@@ -123,36 +157,80 @@ def generate_schedule(employees):
         s1_ends[i] = s1e
 
     # ── Fase 2: Break (solo jornadas >= 6 h) ─────────────────────────
-    # Inicio del break lo más cercano posible al centro de la jornada
-    # (sin salir antes del fin de Silla 1 ni del recurso global), para
-    # que el almuerzo no quede muy adelante ni muy al final del turno.
+    # Regla: Break solo evita traslapes con:
+    #   - Silla 1 de empleados con la MISMA hora de entrada o anterior
+    #   - Breaks ya asignados (nadie puede coincidir en almuerzo)
+    # Se permite cruzar con Silla1 de empleados que entran DESPUÉS.
+    silla1_occ_ph2: dict = {}
+    for k in range(n):
+        s1_slot = next((b for b in breaks_map[k] if b.type == "silla1"), None)
+        if s1_slot:
+            silla1_occ_ph2[k] = (s1_slot.start, s1_slot.end)
+
+    br_assigned: list = []
     for i, (emp, em, xm, sh, dur) in enumerate(emp_data):
         if not dur or sh <= 0 or dur["br"] is None:
             continue
-        br_len = dur["br"]
-        earliest = max(s1_ends[i], busy)
-        latest = xm - br_len
-        if earliest > latest:
-            bs = earliest
-        else:
-            mid = em + (xm - em) // 2
-            ideal = mid - br_len // 2
-            bs = max(earliest, min(ideal, latest))
-        be = bs + br_len
+        br_len   = dur["br"]
+        occupied = list(br_assigned)
+        for k, s1_iv in silla1_occ_ph2.items():
+            if emp_data[k][1] <= em:
+                occupied.append(s1_iv)
+        earliest  = s1_ends[i]
+        latest    = xm - br_len
+        mid       = em + (xm - em) // 2
+        ideal     = mid - br_len // 2
+        preferred = max(earliest, min(ideal, latest))
+        slot = _find_slot(earliest, latest, preferred, br_len, occupied, forward_first=True)
+        bs   = slot if slot is not None else earliest
+        be   = bs + br_len
         breaks_map[i].append(BreakSlot("break", bs, be, br_len, be > xm))
-        busy       = be
-        br_ends[i] = be
+        br_ends[i]  = be
         has_break[i] = True
+        br_assigned.append((bs, be))
 
-    # ── Fase 3: Silla 2 ───────────────────────────────────────────────
-    for i, (emp, em, xm, sh, dur) in enumerate(emp_data):
+    # ── Fase 3: Silla 2 (objetivo: ~75 min antes de salida) ──────────
+    # Regla: Silla 2 solo evita traslapes con:
+    #   - Silla 1 de TODOS los empleados (siempre bloqueante)
+    #   - Silla 2 ya asignadas en este bucle
+    #   - Breaks de empleados que entran a la MISMA hora o antes
+    # Se permite cruzar con breaks de empleados que entran DESPUÉS.
+    silla1_occ = [(b.start, b.end)
+                  for lst in breaks_map for b in lst if b.type == "silla1"]
+    break_occ_by_idx: dict = {}
+    for k in range(n):
+        brk_slot = next((b for b in breaks_map[k] if b.type == "break"), None)
+        if brk_slot:
+            break_occ_by_idx[k] = (brk_slot.start, brk_slot.end)
+
+    s2_assigned: list = []
+    # Orden primario: quien sale antes primero (xm-75 asc).
+    # Orden secundario: dentro del mismo grupo de salida, procesar
+    # de mayor a menor índice para que el primero en llegar quede
+    # de último y, al retroceder, obtenga el slot más temprano.
+    phase3_order = sorted(range(n), key=lambda i: (emp_data[i][2] - 75, -i))
+    for i in phase3_order:
+        emp, em, xm, sh, dur = emp_data[i]
         if not dur or sh <= 0:
             continue
-        prev = br_ends[i] if has_break[i] else s1_ends[i]
-        s2s  = max(prev, busy)
-        s2e  = s2s + dur["s2"]
-        breaks_map[i].append(BreakSlot("silla2", s2s, s2e, dur["s2"], s2e > xm))
-        busy = s2e
+        occupied = list(silla1_occ) + list(s2_assigned)
+        for k, brk_interval in break_occ_by_idx.items():
+            if emp_data[k][1] <= em:  # entryMin del emp k <= entryMin de i
+                occupied.append(brk_interval)
+        prev      = br_ends[i] if has_break[i] else s1_ends[i]
+        earliest  = prev
+        latest    = xm - dur["s2"]
+        ideal     = xm - 75
+        preferred = max(earliest, min(ideal, latest))
+        slot = _find_slot(earliest, latest, preferred, dur["s2"], occupied)
+        if slot is None:
+            s2s, conflict = earliest, True
+        else:
+            s2s      = slot
+            conflict = s2s + dur["s2"] > xm
+        s2e = s2s + dur["s2"]
+        breaks_map[i].append(BreakSlot("silla2", s2s, s2e, dur["s2"], conflict))
+        s2_assigned.append((s2s, s2e))
 
     result = []
     for i, (emp, em, xm, sh, dur) in enumerate(emp_data):
@@ -200,9 +278,9 @@ TBL_CELL_EST  = "#252a33"
 TBL_CELL_EST_ALT = "#20242c"
 TBL_CONFLICT_BG = "#3f1f29"
 TABLE_HEADERS = ("Empleado", "Entrada", "Salida",
-                 "Ley Silla 1", "Break", "Ley Silla 2", "Estado")
+                 "Ley Silla 1", "Break", "Ley Silla 2", "Horas")
 # Anchos mínimos en px (sin stretch al ancho de la ventana): la tabla queda compacta a la izquierda.
-TABLE_COL_MIN_PX = (110, 72, 72, 148, 148, 148, 68)
+TABLE_COL_MIN_PX = (110, 72, 72, 162, 162, 162, 68)
 
 # Tabla GUI: mismos paddings y anclas cabecera ↔ filas para alinear texto.
 TBL_CELL_GRID_PAD = 2
@@ -655,22 +733,18 @@ class HorariosApp(ctk.CTk):
         )
         anchors = TBL_CELL_ANCHORS
 
-        est_txt = valores[6]
-
         def fg_for_cell(i: int) -> str:
-            if conflict:
-                return "#fde8ea" if i == 6 else TEXT1
-            if i == 6:
-                return GREEN if est_txt == "OK" else RED
+            if conflict and i == 6:
+                return "#fde8ea"
             return TEXT1
 
         wrap_by_col = (
             108,
             0,
             0,
-            128,
-            128,
-            128,
+            0,
+            0,
+            0,
             0,
         )
 
@@ -741,9 +815,9 @@ class HorariosApp(ctk.CTk):
         if not name:                   err_fields.append(self._inp_name)
         if not self._valid_time(entry): err_fields.append(self._inp_entry)
         if not self._valid_time(exit_): err_fields.append(self._inp_exit)
-        if time_to_min(exit_) <= time_to_min(entry) and not err_fields:
+        if not err_fields and shift_bounds(entry, exit_)[2] <= 0:
             messagebox.showwarning("Horario invalido",
-                                   "La hora de salida debe ser posterior a la entrada.",
+                                   "La hora de salida debe ser diferente a la entrada.",
                                    parent=self)
             return
 
@@ -842,7 +916,7 @@ class HorariosApp(ctk.CTk):
                           ).grid(row=0, column=1, sticky="e")
 
             # Fila 1: horario
-            sh = (time_to_min(emp.exit) - time_to_min(emp.entry)) / 60
+            sh = shift_bounds(emp.entry, emp.exit)[2]
             ctk.CTkLabel(card, text=f"{emp.entry}  ->  {emp.exit}   ({sh:.1f} h)",
                          font=(FONT, 10), text_color=TEXT2,
                          anchor="w").grid(row=1, column=0, sticky="w", padx=8)
@@ -902,11 +976,12 @@ class HorariosApp(ctk.CTk):
             ent = time_str_ampm(emp.entry) if emp.entry else "—"
             sal = time_str_ampm(emp.exit) if emp.exit else "—"
 
+            horas_txt = f"{emp.shift_hours:.1f} h"
             if not emp.breaks:
                 valores = (
                     nombre, ent, sal,
                     "—", "—", "—",
-                    "—",
+                    horas_txt,
                 )
                 self._add_gui_table_row(row_idx % 2 == 1, emp.has_conflict, valores)
                 row_idx += 1
@@ -922,7 +997,7 @@ class HorariosApp(ctk.CTk):
                 format_slot_ampm(s1),
                 format_slot_ampm(bk) if bk else "—",
                 format_slot_ampm(s2),
-                "CONFLICTO" if emp.has_conflict else "OK",
+                horas_txt,
             )
             self._add_gui_table_row(row_idx % 2 == 1, emp.has_conflict, valores)
             row_idx += 1
@@ -940,7 +1015,8 @@ class HorariosApp(ctk.CTk):
 
         all_t = []
         for e in self._scheduled:
-            all_t += [time_to_min(e.entry), time_to_min(e.exit)]
+            em, xm, _ = shift_bounds(e.entry, e.exit)
+            all_t += [em, xm]
             for b in e.breaks:
                 all_t += [b.start, b.end]
 
@@ -1004,8 +1080,9 @@ class HorariosApp(ctk.CTk):
                               fill=AMBER,
                               font=("Consolas", 9))
 
-            ex = tx(time_to_min(emp.entry))
-            sx = tx(time_to_min(emp.exit))
+            em_px, xm_px, _ = shift_bounds(emp.entry, emp.exit)
+            ex = tx(em_px)
+            sx = tx(xm_px)
             c.create_rectangle(ex, y + row_h * 0.36,
                                sx, y + row_h * 0.64,
                                fill="#282828", outline="")
@@ -1142,8 +1219,9 @@ class HorariosApp(ctk.CTk):
 
         all_t = []
         for e in sch:
-            all_t.append(time_to_min(e.entry))
-            all_t.append(time_to_min(e.exit))
+            em_e, xm_e, _ = shift_bounds(e.entry, e.exit)
+            all_t.append(em_e)
+            all_t.append(xm_e)
             for b in e.breaks:
                 all_t.extend([b.start, b.end])
         min_tt = min(all_t)
@@ -1195,8 +1273,9 @@ class HorariosApp(ctk.CTk):
                         f"{sg}{emp.offset}m", fill=_pil_rgb(AMBER),
                         font=ft_axis, anchor="rm")
 
-            xa = txv(time_to_min(emp.entry))
-            xb = txv(time_to_min(emp.exit))
+            em_pv, xm_pv, _ = shift_bounds(emp.entry, emp.exit)
+            xa = txv(em_pv)
+            xb = txv(xm_pv)
             dr.rectangle([xa, y0 + ROW_H * 0.34, xb, y0 + ROW_H * 0.67],
                          fill=_pil_rgb("#2c2c2c"))
 
@@ -1258,7 +1337,7 @@ class HorariosApp(ctk.CTk):
                 format_slot_ampm(s1),
                 format_slot_ampm(bk) if bk else "—",
                 format_slot_ampm(s2),
-                ("CONFLICTO" if emp.has_conflict else "OK"),
+                f"{emp.shift_hours:.1f} h",
             )
 
         row_data: list[tuple[tuple[str, ...], bool]] = [
@@ -1391,13 +1470,8 @@ class HorariosApp(ctk.CTk):
                 x_b = col_x[jj_] + col_w[jj_] - frame_pad
 
                 fg_txt = _pil_rgb(TEXT1)
-                if is_conf:
-                    if jj_ == 6:
-                        fg_txt = _pil_rgb("#fde8ea")
-                elif jj_ == 6:
-                    fg_txt = (
-                        _pil_rgb(GREEN) if vals[jj_] == "OK"
-                        else _pil_rgb(RED))
+                if is_conf and jj_ == 6:
+                    fg_txt = _pil_rgb("#fde8ea")
 
                 draw_round_rect(
                     dr, [x_a, y0, x_b, y0 + rh], 8,
@@ -1445,13 +1519,14 @@ class HorariosApp(ctk.CTk):
             w = csv.writer(f)
             w.writerow(["Empleado", "Entrada (24 h)", "Salida (24 h)",
                         "Entrada (AM/PM)", "Salida (AM/PM)",
-                        "Ley Silla 1", "Break", "Ley Silla 2", "Estado"])
+                        "Ley Silla 1", "Break", "Ley Silla 2", "Horas"])
             for emp in self._scheduled:
                 ent_ampm = time_str_ampm(emp.entry) if emp.entry else ""
                 sal_ampm = time_str_ampm(emp.exit) if emp.exit else ""
+                horas_csv = f"{emp.shift_hours:.1f} h"
                 if not emp.breaks:
                     w.writerow([emp.name, emp.entry, emp.exit, ent_ampm, sal_ampm,
-                                "", "", "", "Sin descanso"])
+                                "", "", "", horas_csv])
                     continue
                 s1 = self._slot_by_type(emp.breaks, "silla1")
                 bk = self._slot_by_type(emp.breaks, "break")
@@ -1465,7 +1540,7 @@ class HorariosApp(ctk.CTk):
                     format_slot_ampm(s1),
                     format_slot_ampm(bk) if bk else "—",
                     format_slot_ampm(s2),
-                    "CONFLICTO" if emp.has_conflict else "OK",
+                    horas_csv,
                 ])
 
         messagebox.showinfo("Exportado",
