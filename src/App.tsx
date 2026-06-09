@@ -12,12 +12,32 @@ import {
 } from './timeFormat';
 import './App.css';
 
+const THEMES = [
+  { id: 'dark',          label: '◼  Oscuro'        },
+  { id: 'light',         label: '◻  Claro'         },
+  { id: 'neubrutal',     label: '▲  Neubrutal'     },
+  { id: 'editorial',     label: '✦  Editorial'     },
+  { id: 'retro',         label: '⌨  Retro‑Tech'    },
+  { id: 'neon-arcade',   label: '★  Neon Arcade'   },
+  { id: 'blueprint',     label: '⬡  Blueprint'     },
+  { id: 'zen',           label: '☯  Zen'           },
+  { id: 'glass',         label: '🪟  Glassmorphism' },
+  { id: 'material',      label: '📐  Material'      },
+  { id: 'cyberpunk',     label: '⚡  Cyberpunk'     },
+  { id: 'vintage',       label: '📜  Vintage'       },
+  { id: 'flat-pastel',   label: '🎨  Flat Pastel'   },
+  { id: 'dark-glass',    label: '🌑  Dark Glass'    },
+  { id: 'nature',        label: '🌿  Nature'        },
+  { id: 'high-contrast', label: '♿  Alto Contraste'},
+] as const;
+type ThemeId = (typeof THEMES)[number]['id'];
+
 const INITIAL_EMPLOYEES: Employee[] = [];
 
 const BREAK_COLORS: Record<BreakType, string> = {
-  silla1: '#4a9eff',
-  break:  '#3fa266',
-  silla2: '#e09a30',
+  silla1: 'var(--break-s1)',
+  break:  'var(--break-br)',
+  silla2: 'var(--break-s2)',
 };
 
 function slotByType(brks: BreakSlot[], btype: BreakType): BreakSlot | undefined {
@@ -140,7 +160,6 @@ function Timeline({ scheduled, widthAvail }: TimelineProps) {
       >
         {scheduled.map((_, i) => {
           const y = PAD_TOP + i * (ROW_H + ROW_GAP);
-          const fill = i % 2 === 0 ? '#141414' : 'transparent';
           return (
             <rect
               key={i}
@@ -148,7 +167,7 @@ function Timeline({ scheduled, widthAvail }: TimelineProps) {
               y={y}
               width={TL_W}
               height={ROW_H}
-              fill={fill}
+              style={{ fill: i % 2 === 0 ? 'var(--tl-row-even)' : 'var(--tl-row-odd)' }}
             />
           );
         })}
@@ -160,7 +179,7 @@ function Timeline({ scheduled, widthAvail }: TimelineProps) {
             y1={PAD_TOP}
             x2={toX(t)}
             y2={PAD_TOP + scheduled.length * ROW_H}
-            stroke="#2a2a2a"
+            style={{ stroke: 'var(--tl-grid)' }}
             strokeWidth={1}
           />
         ))}
@@ -172,7 +191,7 @@ function Timeline({ scheduled, widthAvail }: TimelineProps) {
               y1={PAD_TOP + scheduled.length * ROW_H}
               x2={toX(t)}
               y2={PAD_TOP + scheduled.length * ROW_H + 6}
-              stroke="#555555"
+              style={{ stroke: 'var(--tl-axis-tick)' }}
               strokeWidth={1}
             />
             <text
@@ -180,8 +199,8 @@ function Timeline({ scheduled, widthAvail }: TimelineProps) {
               y={PAD_TOP + scheduled.length * ROW_H + 22}
               textAnchor="middle"
               fontSize={10}
-              fontFamily="Segoe UI, var(--font-sans)"
-              fill="rgba(255,255,255,0.53)"
+              fontFamily="var(--font-sans)"
+              style={{ fill: 'var(--tl-axis-label)' }}
             >
               {axisLabelMinToTime(t)}
             </text>
@@ -193,7 +212,7 @@ function Timeline({ scheduled, widthAvail }: TimelineProps) {
           y1={PAD_TOP + scheduled.length * ROW_H}
           x2={dx + LABEL_W + TL_W}
           y2={PAD_TOP + scheduled.length * ROW_H}
-          stroke="#3a3a3a"
+          style={{ stroke: 'var(--tl-axis)' }}
           strokeWidth={1}
         />
 
@@ -213,9 +232,9 @@ function Timeline({ scheduled, widthAvail }: TimelineProps) {
                 textAnchor="end"
                 fontSize={12}
                 fontFamily="var(--font-sans)"
-                fontWeight={400}
-                fill={emp.hasConflict ? '#e0505a' : 'rgba(255,255,255,0.91)'}
-              >
+              fontWeight={400}
+              style={{ fill: emp.hasConflict ? 'var(--red)' : 'var(--tl-emp-label)' }}
+            >
                 {lbl}
               </text>
               {emp.offset !== 0 && (
@@ -225,7 +244,7 @@ function Timeline({ scheduled, widthAvail }: TimelineProps) {
                   textAnchor="end"
                   fontSize={9}
                   fontFamily="var(--font-mono)"
-                  fill="#e09a30"
+                  style={{ fill: 'var(--tl-offset)' }}
                 >
                   {emp.offset > 0 ? `+${emp.offset}` : emp.offset}m
                 </text>
@@ -235,12 +254,12 @@ function Timeline({ scheduled, widthAvail }: TimelineProps) {
                 y={y + ROW_H * 0.36}
                 width={Math.max(sx - ex, 2)}
                 height={ROW_H * 0.28}
-                fill="#282828"
+                style={{ fill: 'var(--tl-shift-bar)' }}
               />
               {emp.breaks.map((brk, j) => {
                 const x1 = toX(brk.start);
                 const x2 = Math.max(toX(brk.end), x1 + 4);
-                const col = brk.conflict ? '#e0505a' : BREAK_COLORS[brk.type];
+                const col = brk.conflict ? 'var(--red)' : BREAK_COLORS[brk.type];
                 return (
                   <g key={j}>
                     <rect
@@ -248,7 +267,7 @@ function Timeline({ scheduled, widthAvail }: TimelineProps) {
                       y={y + 4}
                       width={x2 - x1}
                       height={ROW_H - 8}
-                      fill={col}
+                      style={{ fill: col }}
                     />
                     {brk.conflict && (
                       <rect
@@ -257,7 +276,7 @@ function Timeline({ scheduled, widthAvail }: TimelineProps) {
                         width={x2 - x1}
                         height={ROW_H - 8}
                         fill="none"
-                        stroke="#e0505a"
+                        style={{ stroke: 'var(--red)' }}
                         strokeWidth={2}
                       />
                     )}
@@ -269,7 +288,7 @@ function Timeline({ scheduled, widthAvail }: TimelineProps) {
                         fontSize={10}
                         fontWeight={700}
                         fontFamily="var(--font-sans)"
-                        fill="#050505"
+                        style={{ fill: 'var(--tl-break-text)' }}
                       >
                         {brk.duration}m
                       </text>
@@ -291,6 +310,14 @@ export default function App() {
   const [newEntry, setNewEntry] = useState('08:00');
   const [newExit, setNewExit] = useState('16:00');
   const [fieldErr, setFieldErr] = useState<'name' | 'entry' | 'exit' | null>(null);
+  const [theme, setTheme] = useState<ThemeId>(
+    () => (localStorage.getItem('hr-theme') as ThemeId | null) ?? 'dark',
+  );
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('hr-theme', theme);
+  }, [theme]);
 
   const timelineHostRef = useRef<HTMLDivElement>(null);
   const [timelineInnerW, setTimelineInnerW] = useState(900);
@@ -446,26 +473,38 @@ export default function App() {
             </p>
           </div>
         </div>
-        <div className="header-stats no-screenshot">
-          <div className="stat-box">
-            <span className="stat-box-val">{employees.length}</span>
-            <span className="stat-box-lbl">Empleados</span>
-          </div>
-          <div className="stat-box">
-            <span className="stat-box-val stat-box-val--green">{withBreaks}</span>
-            <span className="stat-box-lbl">Con descansos</span>
-          </div>
-          <div className="stat-box">
-            <span
-              className={`stat-box-val ${conflicts.length ? 'stat-box-val--red' : ''}`}
-            >
-              {conflicts.length}
-            </span>
-            <span className="stat-box-lbl">Conflictos</span>
-          </div>
-          <div className="stat-box">
-            <span className="stat-box-val">{totalBreakMin}</span>
-            <span className="stat-box-lbl">Min. asignados</span>
+        <div className="header-right no-screenshot">
+          <select
+            className="theme-select"
+            value={theme}
+            onChange={e => setTheme(e.target.value as ThemeId)}
+            aria-label="Tema visual"
+          >
+            {THEMES.map(t => (
+              <option key={t.id} value={t.id}>{t.label}</option>
+            ))}
+          </select>
+          <div className="header-stats">
+            <div className="stat-box">
+              <span className="stat-box-val">{employees.length}</span>
+              <span className="stat-box-lbl">Empleados</span>
+            </div>
+            <div className="stat-box">
+              <span className="stat-box-val stat-box-val--green">{withBreaks}</span>
+              <span className="stat-box-lbl">Con descansos</span>
+            </div>
+            <div className="stat-box">
+              <span
+                className={`stat-box-val ${conflicts.length ? 'stat-box-val--red' : ''}`}
+              >
+                {conflicts.length}
+              </span>
+              <span className="stat-box-lbl">Conflictos</span>
+            </div>
+            <div className="stat-box">
+              <span className="stat-box-val">{totalBreakMin}</span>
+              <span className="stat-box-lbl">Min. asignados</span>
+            </div>
           </div>
         </div>
       </header>
