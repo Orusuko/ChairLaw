@@ -1,4 +1,4 @@
-import type { Employee, BreakSlot, ScheduledEmployee } from './types';
+import type { Employee, BreakSlot, BreakType, ScheduledEmployee } from './types';
 
 export function timeToMin(t: string): number {
   const [h = '0', m = '0'] = t.split(':');
@@ -18,6 +18,23 @@ export function shiftBounds(entry: string, exit: string): [number, number, numbe
   let xm = timeToMin(exit);
   if (xm < em) xm += 1440;
   return [em, xm, (xm - em) / 60];
+}
+
+/** Snappea un valor al múltiplo de `step` más cercano. */
+export function snapToGrid(min: number, step = 5): number {
+  return Math.round(min / step) * step;
+}
+
+/** Ventana legal de inicio para un break de tipo `type` dado un empleado. */
+export function getLegalWindow(
+  em: number, xm: number, type: BreakType,
+  s1End: number, brEnd: number, duration: number,
+): { earliest: number; latest: number } {
+  switch (type) {
+    case 'silla1': return { earliest: em + 75,  latest: xm - duration };
+    case 'break':  return { earliest: s1End,    latest: xm - duration };
+    case 'silla2': return { earliest: brEnd > s1End ? brEnd : s1End, latest: xm - duration };
+  }
 }
 
 function getDurations(shiftH: number): { s1: number; br: number | null; s2: number } | null {
@@ -95,10 +112,6 @@ export function generateSchedule(employees: Employee[]): ScheduledEmployee[] {
   }
 
   // ── Fase 2: Break (solo jornadas >= 6 h) ──────────────────────────────────
-  // Regla: Break solo evita traslapes con:
-  //   - Silla 1 de empleados con la MISMA hora de entrada o anterior
-  //   - Breaks ya asignados (nadie puede coincidir en almuerzo)
-  // Se permite cruzar con Silla1 de empleados que entran DESPUÉS.
   const silla1OccPh2 = new Map<number, [number, number]>();
   for (let k = 0; k < n; k++) {
     const s1 = breaksMap[k].find(b => b.type === 'silla1');
@@ -129,8 +142,6 @@ export function generateSchedule(employees: Employee[]): ScheduledEmployee[] {
   }
 
   // ── Fase 3: Ley Silla 2 (objetivo: ~75 min antes de salida) ──────────────
-  // Silla 2 solo evita traslapes con Silla1 de todos, Silla2 ya asignadas,
-  // y breaks de empleados con la misma hora de entrada o anterior.
   const silla1Occ: [number, number][] = breaksMap
     .flatMap(lst => lst)
     .filter(b => b.type === 'silla1')
@@ -181,4 +192,39 @@ export function generateSchedule(employees: Employee[]): ScheduledEmployee[] {
     shiftHours:  shifts[i],
     hasConflict: breaksMap[i].some(b => b.conflict),
   }));
+}
+
+/**
+ * Genera el horario base con `generateSchedule` y luego aplica los overrides manuales
+ * de posición de break que cada empleado pueda tener en `breakOverrides`.
+ */
+export function applyScheduleWithOverrides(employees: Employee[]): ScheduledEmployee[] {
+  const base = generateSchedule(employees);
+
+  return base.map(emp => {
+    const overrides = emp.breakOverrides;
+    if (!overrides || Object.keys(overrides).length === 0) return emp;
+
+    const [, exitMin] = shiftBounds(emp.entry, emp.exit);
+
+    const breaks = emp.breaks.map(brk => {
+      const overrideStart = overrides[brk.type];
+      if (overrideStart === undefined) return brk;
+
+      const newEnd = overrideStart + brk.duration;
+      return {
+        ...brk,
+        start: overrideStart,
+        end:   newEnd,
+        conflict: newEnd > exitMin,
+        isOverride: true,
+      };
+    });
+
+    return {
+      ...emp,
+      breaks,
+      hasConflict: breaks.some(b => b.conflict),
+    };
+  });
 }
