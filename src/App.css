@@ -2391,3 +2391,121 @@ html, body, #root {
   }
 }
 
+/* ═══════════════════════════════════════════════════════════
+   ScheduleModeSelector (Individual / Masivo)
+   ═══════════════════════════════════════════════════════════ */
+.mode-selector {
+  display: flex;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 2px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.mode-btn {
+  padding: 4px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text3);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  border-radius: calc(var(--radius-md) - 2px);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+  white-space: nowrap;
+}
+.mode-btn:hover { color: var(--text1); }
+.mode-btn--active {
+  background: var(--blue);
+  color: #fff;
+  font-weight: 700;
+}
+.mode-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* ═══════════════════════════════════════════════════════════
+   Tabla masivo: 8 columnas
+   ═══════════════════════════════════════════════════════════ */
+.table-head-grid.mass-mode {
+  grid-template-columns: minmax(80px, 0.85fr) minmax(100px, 1fr) 70px 70px 148px 148px 148px 62px;
+}
+.gui-table-row.mass-mode {
+  grid-template-columns: minmax(80px, 0.85fr) minmax(100px, 1fr) 70px 70px 148px 148px 148px 62px;
+}
+
+/* Columna Área en tabla */
+.col-area {
+  --td-justify: flex-start;
+  --td-text: left;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--blue) !important;
+}
+.th-area {
+  --th-justify: flex-start;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--blue);
+}
+
+/* Badge de área en tarjeta de empleado */
+.emp-area-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--blue);
+  background: rgba(74, 158, 255, 0.12);
+  border: 1px solid rgba(74, 158, 255, 0.3);
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin: 2px 0 4px;
+}
+
+/* Select de área en formulario */
+.left-sel {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+  cursor: pointer;
+}
+
+/* Block-title badge "Masivo" */
+.block-title-badge {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--blue);
+  background: rgba(74, 158, 255, 0.12);
+  border: 1px solid rgba(74, 158, 255, 0.3);
+  border-radius: 4px;
+  padding: 2px 7px;
+  vertical-align: middle;
+}
+
+/* Área en cards móvil */
+.sc-card-area {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--blue);
+  margin-bottom: 3px;
+}
+
+@media (max-width: 640px) {
+  .mode-selector { width: 100%; }
+  .mode-btn { flex: 1; text-align: center; }
+}
+

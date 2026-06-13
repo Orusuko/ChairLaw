@@ -1,4 +1,5 @@
-import type { Employee, BreakSlot, BreakType, ScheduledEmployee } from './types';
+import type { Employee, BreakSlot, BreakType, ScheduledEmployee, ScheduleMode } from './types';
+import { normalizeArea } from './areas';
 
 export function timeToMin(t: string): number {
   const [h = '0', m = '0'] = t.split(':');
@@ -195,12 +196,9 @@ export function generateSchedule(employees: Employee[]): ScheduledEmployee[] {
 }
 
 /**
- * Genera el horario base con `generateSchedule` y luego aplica los overrides manuales
- * de posición de break que cada empleado pueda tener en `breakOverrides`.
+ * Aplica los overrides manuales de posición a una lista ya calculada.
  */
-export function applyScheduleWithOverrides(employees: Employee[]): ScheduledEmployee[] {
-  const base = generateSchedule(employees);
-
+function applyOverrides(base: ScheduledEmployee[]): ScheduledEmployee[] {
   return base.map(emp => {
     const overrides = emp.breakOverrides;
     if (!overrides || Object.keys(overrides).length === 0) return emp;
@@ -227,4 +225,55 @@ export function applyScheduleWithOverrides(employees: Employee[]): ScheduledEmpl
       hasConflict: breaks.some(b => b.conflict),
     };
   });
+}
+
+/**
+ * Genera el horario base con `generateSchedule` y luego aplica los overrides manuales
+ * de posición de break que cada empleado pueda tener en `breakOverrides`.
+ */
+export function applyScheduleWithOverrides(employees: Employee[]): ScheduledEmployee[] {
+  return applyOverrides(generateSchedule(employees));
+}
+
+/**
+ * Agrupa empleados por área y corre `generateSchedule` por grupo.
+ * Los descansos solo compiten dentro de la misma área; entre áreas se pueden cruzar.
+ */
+export function generateMassSchedule(employees: Employee[]): ScheduledEmployee[] {
+  const groups = new Map<string, Employee[]>();
+  for (const emp of employees) {
+    const key = normalizeArea(emp.area);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(emp);
+  }
+
+  const all: ScheduledEmployee[] = [];
+  for (const group of groups.values()) {
+    all.push(...generateSchedule(group));
+  }
+
+  return all.sort((a, b) =>
+    (a.area ?? '').localeCompare(b.area ?? '') ||
+    timeToMin(a.entry) - timeToMin(b.entry) ||
+    a.name.localeCompare(b.name),
+  );
+}
+
+/**
+ * Versión masiva con overrides aplicados.
+ */
+export function applyScheduleWithOverridesMass(employees: Employee[]): ScheduledEmployee[] {
+  return applyOverrides(generateMassSchedule(employees));
+}
+
+/**
+ * Punto de entrada unificado según el modo.
+ */
+export function applySchedule(
+  employees: Employee[],
+  mode: ScheduleMode,
+): ScheduledEmployee[] {
+  return mode === 'mass'
+    ? applyScheduleWithOverridesMass(employees)
+    : applyScheduleWithOverrides(employees);
 }

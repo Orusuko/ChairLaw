@@ -1,5 +1,7 @@
 import type { ThemeId } from '../themes';
+import type { ScheduleMode } from '../types';
 import { ThemeSelector } from './ThemeSelector';
+import { ScheduleModeSelector } from './ScheduleModeSelector';
 
 interface Props {
   employeeCount: number;
@@ -8,9 +10,11 @@ interface Props {
   totalBreakMin: number;
   theme: ThemeId;
   onThemeChange: (id: ThemeId) => void;
+  scheduleMode: ScheduleMode;
+  onScheduleModeChange: (mode: ScheduleMode) => void;
 }
 
-export function AppHeader({ employeeCount, withBreaks, conflictCount, totalBreakMin, theme, onThemeChange }: Props) {
+export function AppHeader({ employeeCount, withBreaks, conflictCount, totalBreakMin, theme, onThemeChange, scheduleMode, onScheduleModeChange }: Props) {
   return (
     <header className="app-header">
       <div className="header-brand">
@@ -24,6 +28,7 @@ export function AppHeader({ employeeCount, withBreaks, conflictCount, totalBreak
       </div>
 
       <div className="header-right">
+        <ScheduleModeSelector mode={scheduleMode} onChange={onScheduleModeChange} />
         <ThemeSelector theme={theme} onChange={onThemeChange} />
         <div className="header-stats no-screenshot" role="status" aria-live="polite" aria-label="Estadísticas">
           <div className="stat-box">

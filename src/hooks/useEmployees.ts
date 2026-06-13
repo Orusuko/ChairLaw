@@ -1,30 +1,40 @@
 import { useState } from 'react';
-import type { Employee, BreakType } from '../types';
+import type { Employee, BreakType, ScheduleMode } from '../types';
 import { shiftBounds } from '../algorithm';
 import { validTime } from '../timeFormat';
+import { isValidArea, normalizeArea } from '../areas';
 
 export interface EmployeeFormData {
   name: string;
   entry: string;
   exit: string;
+  area?: string;
 }
 
-export type FormFieldErr = 'name' | 'entry' | 'exit' | null;
+export type FormFieldErr = 'name' | 'entry' | 'exit' | 'area' | null;
 
 export function useEmployees() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  function addEmployee(data: EmployeeFormData): FormFieldErr {
-    const { name, entry, exit } = data;
+  function addEmployee(data: EmployeeFormData, mode: ScheduleMode = 'individual'): FormFieldErr {
+    const { name, entry, exit, area } = data;
     if (!name.trim()) return 'name';
     if (!validTime(entry)) return 'entry';
     if (!validTime(exit)) return 'exit';
     if (shiftBounds(entry, exit)[2] <= 0) return 'exit';
+    if (mode === 'mass' && !isValidArea(area)) return 'area';
 
     setEmployees(prev => [
       ...prev,
-      { id: String(Date.now()), name: name.trim(), entry, exit, offset: 0 },
+      {
+        id: String(Date.now()),
+        name: name.trim(),
+        entry,
+        exit,
+        offset: 0,
+        area: mode === 'mass' ? normalizeArea(area) : undefined,
+      },
     ]);
     return null;
   }
@@ -52,12 +62,13 @@ export function useEmployees() {
     setEditingId(null);
   }
 
-  function saveEdit(id: string, data: EmployeeFormData): FormFieldErr {
-    const { name, entry, exit } = data;
+  function saveEdit(id: string, data: EmployeeFormData, mode: ScheduleMode = 'individual'): FormFieldErr {
+    const { name, entry, exit, area } = data;
     if (!name.trim()) return 'name';
     if (!validTime(entry)) return 'entry';
     if (!validTime(exit)) return 'exit';
     if (shiftBounds(entry, exit)[2] <= 0) return 'exit';
+    if (mode === 'mass' && !isValidArea(area)) return 'area';
 
     setEmployees(prev =>
       prev.map(e =>
@@ -67,7 +78,8 @@ export function useEmployees() {
               name: name.trim(),
               entry,
               exit,
-              // Limpiar overrides al cambiar el horario
+              area: mode === 'mass' ? normalizeArea(area) : e.area,
+              // Limpiar overrides al cambiar horario o área
               breakOverrides: {},
             }
           : e,

@@ -1,5 +1,5 @@
 import { BREAK_COLORS, BREAK_LABEL } from '../types';
-import type { Employee, ScheduledEmployee } from '../types';
+import type { Employee, ScheduledEmployee, ScheduleMode } from '../types';
 import type { EmployeeFormData } from '../hooks/useEmployees';
 import { shiftBounds } from '../algorithm';
 import { formatShiftLine, formatSlotAmPm } from '../timeFormat';
@@ -9,6 +9,7 @@ interface Props {
   emp: Employee;
   scheduled: ScheduledEmployee | undefined;
   isEditing: boolean;
+  scheduleMode: ScheduleMode;
   onRemove: () => void;
   onNudgeOffset: (delta: number) => void;
   onStartEdit: () => void;
@@ -18,7 +19,7 @@ interface Props {
 }
 
 export function EmployeeCard({
-  emp, scheduled, isEditing,
+  emp, scheduled, isEditing, scheduleMode,
   onRemove, onNudgeOffset, onStartEdit, onCancelEdit, onSaveEdit, onClearOverrides,
 }: Props) {
   const conflict = scheduled?.hasConflict ?? false;
@@ -33,8 +34,9 @@ export function EmployeeCard({
         <div className="emp-edit-wrap">
           <p className="emp-edit-label">Editando: <strong>{emp.name}</strong></p>
           <EmployeeForm
-            initialData={{ name: emp.name, entry: emp.entry, exit: emp.exit }}
+            initialData={{ name: emp.name, entry: emp.entry, exit: emp.exit, area: emp.area }}
             submitLabel="Guardar cambios"
+            scheduleMode={scheduleMode}
             onSubmit={onSaveEdit}
             onCancel={onCancelEdit}
           />
@@ -64,6 +66,10 @@ export function EmployeeCard({
               </button>
             </div>
           </div>
+
+          {scheduleMode === 'mass' && emp.area && (
+            <div className="emp-area-badge">{emp.area}</div>
+          )}
 
           <div className="emp-shift mono">
             {formatShiftLine(emp.entry, emp.exit, shiftBounds(emp.entry, emp.exit)[2])}

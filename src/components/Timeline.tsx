@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { shiftBounds, snapToGrid, getLegalWindow } from '../algorithm';
 import { axisLabelMinToTime } from '../timeFormat';
 import { BREAK_COLORS } from '../types';
-import type { BreakSlot, BreakType, ScheduledEmployee } from '../types';
+import type { BreakSlot, BreakType, ScheduledEmployee, ScheduleMode } from '../types';
 
 interface DragState {
   empId: string;
@@ -23,9 +23,10 @@ interface Props {
   scheduled: ScheduledEmployee[];
   widthAvail: number;
   onBreakOverride: (empId: string, type: BreakType, startMin: number) => void;
+  scheduleMode?: ScheduleMode;
 }
 
-export function Timeline({ scheduled, widthAvail, onBreakOverride }: Props) {
+export function Timeline({ scheduled, widthAvail, onBreakOverride, scheduleMode = 'individual' }: Props) {
   if (scheduled.length === 0) return null;
 
   const svgRef = useRef<SVGSVGElement>(null);
@@ -174,7 +175,12 @@ export function Timeline({ scheduled, widthAvail, onBreakOverride }: Props) {
         {scheduled.map((emp, i) => {
           const y = PAD_TOP + i * ROW_H;
           const cy = y + ROW_H / 2;
-          const lbl = emp.name.length > 20 ? emp.name.slice(0, 19) + '…' : emp.name;
+          // En masivo: "COM · Ashley" — abreviar área a 3 letras
+          const areaPrefix = scheduleMode === 'mass' && emp.area
+            ? `${emp.area.slice(0, 3)} · `
+            : '';
+          const nameRaw = `${areaPrefix}${emp.name}`;
+          const lbl = nameRaw.length > 22 ? nameRaw.slice(0, 21) + '…' : nameRaw;
           const [emPx, xmPx] = shiftBounds(emp.entry, emp.exit);
           const ex = toX(emPx);
           const sx = toX(xmPx);

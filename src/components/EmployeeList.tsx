@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Employee, ScheduledEmployee } from '../types';
+import type { Employee, ScheduledEmployee, ScheduleMode } from '../types';
 import type { EmployeeFormData, FormFieldErr } from '../hooks/useEmployees';
 import { EmployeeCard } from './EmployeeCard';
 
@@ -7,6 +7,7 @@ interface Props {
   employees: Employee[];
   scheduled: ScheduledEmployee[];
   editingId: string | null;
+  scheduleMode: ScheduleMode;
   onRemove: (id: string) => void;
   onNudgeOffset: (id: string, delta: number) => void;
   onStartEdit: (id: string) => void;
@@ -16,7 +17,7 @@ interface Props {
 }
 
 export function EmployeeList({
-  employees, scheduled, editingId,
+  employees, scheduled, editingId, scheduleMode,
   onRemove, onNudgeOffset, onStartEdit, onCancelEdit, onSaveEdit, onClearOverrides,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
@@ -55,6 +56,7 @@ export function EmployeeList({
               emp={emp}
               scheduled={schedById(emp.id)}
               isEditing={editingId === emp.id}
+              scheduleMode={scheduleMode}
               onRemove={() => onRemove(emp.id)}
               onNudgeOffset={delta => onNudgeOffset(emp.id, delta)}
               onStartEdit={() => onStartEdit(emp.id)}

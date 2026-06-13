@@ -1,4 +1,5 @@
 export type BreakType = 'silla1' | 'break' | 'silla2';
+export type ScheduleMode = 'individual' | 'mass';
 
 export interface Employee {
   id: string;
@@ -6,6 +7,7 @@ export interface Employee {
   entry: string;   // "HH:MM"
   exit: string;    // "HH:MM"
   offset: number;  // minutos de retraso manual (-60 a +120)
+  area?: string;   // obligatorio en modo masivo
   /** Override manual de inicio (minutos desde medianoche) por tipo de break. null = usar algoritmo */
   breakOverrides?: Partial<Record<BreakType, number>>;
 }

@@ -1,11 +1,10 @@
 import { forwardRef } from 'react';
-import type { BreakType, ScheduledEmployee } from '../types';
+import type { BreakType, ScheduledEmployee, ScheduleMode } from '../types';
 import { BREAK_COLORS, BREAK_LABEL } from '../types';
 import { formatSlotAmPm, timeStrAmPm } from '../timeFormat';
 
-const TABLE_HEADERS = [
-  'Empleado', 'Entrada', 'Salida', 'Ley Silla 1', 'Break', 'Ley Silla 2', 'Horas',
-] as const;
+const IND_HEADERS = ['Empleado', 'Entrada', 'Salida', 'Ley Silla 1', 'Break', 'Ley Silla 2', 'Horas'] as const;
+const MASS_HEADERS = ['Área', 'Empleado', 'Entrada', 'Salida', 'Ley Silla 1', 'Break', 'Ley Silla 2', 'Horas'] as const;
 
 function slotByType(brks: ScheduledEmployee['breaks'], t: BreakType) {
   return brks.find(b => b.type === t);
@@ -19,11 +18,14 @@ export interface ScheduleTableRefs {
 interface Props {
   scheduled: ScheduledEmployee[];
   refs: ScheduleTableRefs;
+  scheduleMode: ScheduleMode;
 }
 
-export const ScheduleTable = forwardRef<HTMLDivElement, Props>(({ scheduled, refs }, _ref) => {
+export const ScheduleTable = forwardRef<HTMLDivElement, Props>(({ scheduled, refs, scheduleMode }, _ref) => {
   const { tableRef, cardsRef } = refs;
-  type TRow = { zebra: boolean; conflict: boolean; cells: string[] };
+  const isMass = scheduleMode === 'mass';
+
+  type TRow = { zebra: boolean; conflict: boolean; cells: string[]; area?: string };
 
   const tableRows: TRow[] = [];
   scheduled.forEach((emp, rowIdx) => {
@@ -33,43 +35,56 @@ export const ScheduleTable = forwardRef<HTMLDivElement, Props>(({ scheduled, ref
     }
     const ent = emp.entry ? timeStrAmPm(emp.entry) : '—';
     const sal = emp.exit  ? timeStrAmPm(emp.exit)  : '—';
+    const base = [nombre, ent, sal];
 
-    if (!emp.breaks.length) {
-      tableRows.push({ zebra: rowIdx % 2 === 1, conflict: emp.hasConflict,
-        cells: [nombre, ent, sal, '—', '—', '—', emp.shiftHours.toFixed(1) + ' h'] });
-      return;
-    }
+    const noBreaks = !emp.breaks.length;
     const s1 = slotByType(emp.breaks, 'silla1');
     const bk = slotByType(emp.breaks, 'break');
     const s2 = slotByType(emp.breaks, 'silla2');
-    tableRows.push({
-      zebra: rowIdx % 2 === 1,
-      conflict: emp.hasConflict,
-      cells: [nombre, ent, sal, formatSlotAmPm(s1), bk ? formatSlotAmPm(bk) : '—', formatSlotAmPm(s2), emp.shiftHours.toFixed(1) + ' h'],
-    });
+    const breakCells = noBreaks
+      ? ['—', '—', '—', emp.shiftHours.toFixed(1) + ' h']
+      : [formatSlotAmPm(s1), bk ? formatSlotAmPm(bk) : '—', formatSlotAmPm(s2), emp.shiftHours.toFixed(1) + ' h'];
+
+    const cells = isMass
+      ? [emp.area ?? '—', ...base, ...breakCells]
+      : [...base, ...breakCells];
+
+    tableRows.push({ zebra: rowIdx % 2 === 1, conflict: emp.hasConflict, cells, area: emp.area });
   });
+
+  const headers = isMass ? MASS_HEADERS : IND_HEADERS;
+  // In mass mode conflict col is index 7 (Horas), in individual it's index 6
+  const horasColIdx = isMass ? 7 : 6;
 
   return (
     <>
       {/* ── Desktop table ── */}
       <div ref={tableRef} className="table-outer" role="region" aria-label="Tabla de horarios">
         <div className="table-accent-top" />
-        <div className="table-head-grid" role="row">
-          {TABLE_HEADERS.map((h, i) => (
-            <div key={h} className={`th-cell th-c${i}`} role="columnheader">{h}</div>
+        <div className={`table-head-grid${isMass ? ' mass-mode' : ''}`} role="row">
+          {headers.map((h, i) => (
+            <div key={h} className={`th-cell th-c${i}${isMass && i === 0 ? ' th-area' : ''}`} role="columnheader">{h}</div>
           ))}
         </div>
         <div className="table-accent-bot" />
         <div className="table-body-scroll" role="rowgroup">
           {tableRows.map((row, ri) => (
-            <div key={ri} className="gui-table-row" role="row">
+            <div key={ri} className={`gui-table-row${isMass ? ' mass-mode' : ''}`} role="row">
               {row.cells.map((cell, ci) => {
-                const est = ci === 6 && row.conflict ? 'est-bad' : '';
+                const est = ci === horasColIdx && row.conflict ? 'est-bad' : '';
+                const isAreaCol = isMass && ci === 0;
                 return (
                   <div
                     key={ci}
                     role="cell"
-                    className={['gui-td', `col-${ci}`, row.zebra ? 'zebra-alt' : '', row.conflict ? 'row-conflict' : '', est].filter(Boolean).join(' ')}
+                    className={[
+                      'gui-td',
+                      `col-${ci}`,
+                      isAreaCol ? 'col-area' : '',
+                      row.zebra ? 'zebra-alt' : '',
+                      row.conflict ? 'row-conflict' : '',
+                      est,
+                    ].filter(Boolean).join(' ')}
                   >
                     {cell}
                   </div>
@@ -96,6 +111,9 @@ export const ScheduleTable = forwardRef<HTMLDivElement, Props>(({ scheduled, ref
                 <span className="sc-card-name">{emp.name}</span>
                 <span className="sc-card-hours">{emp.shiftHours.toFixed(1)} h</span>
               </div>
+              {isMass && emp.area && (
+                <div className="sc-card-area">{emp.area}</div>
+              )}
               <div className="sc-card-times mono">
                 {timeStrAmPm(emp.entry)} → {timeStrAmPm(emp.exit)}
               </div>
