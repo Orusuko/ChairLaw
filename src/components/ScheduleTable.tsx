@@ -11,11 +11,18 @@ function slotByType(brks: ScheduledEmployee['breaks'], t: BreakType) {
   return brks.find(b => b.type === t);
 }
 
-interface Props {
-  scheduled: ScheduledEmployee[];
+export interface ScheduleTableRefs {
+  tableRef: React.RefObject<HTMLDivElement>;
+  cardsRef: React.RefObject<HTMLDivElement>;
 }
 
-export const ScheduleTable = forwardRef<HTMLDivElement, Props>(({ scheduled }, ref) => {
+interface Props {
+  scheduled: ScheduledEmployee[];
+  refs: ScheduleTableRefs;
+}
+
+export const ScheduleTable = forwardRef<HTMLDivElement, Props>(({ scheduled, refs }, _ref) => {
+  const { tableRef, cardsRef } = refs;
   type TRow = { zebra: boolean; conflict: boolean; cells: string[] };
 
   const tableRows: TRow[] = [];
@@ -45,7 +52,7 @@ export const ScheduleTable = forwardRef<HTMLDivElement, Props>(({ scheduled }, r
   return (
     <>
       {/* ── Desktop table ── */}
-      <div ref={ref} className="table-outer" role="region" aria-label="Tabla de horarios">
+      <div ref={tableRef} className="table-outer" role="region" aria-label="Tabla de horarios">
         <div className="table-accent-top" />
         <div className="table-head-grid" role="row">
           {TABLE_HEADERS.map((h, i) => (
@@ -74,7 +81,7 @@ export const ScheduleTable = forwardRef<HTMLDivElement, Props>(({ scheduled }, r
       </div>
 
       {/* ── Mobile cards (visible only < 640 px via CSS) ── */}
-      <div className="schedule-cards" role="list" aria-label="Horarios (vista móvil)">
+      <div ref={cardsRef} className="schedule-cards" role="list" aria-label="Horarios (vista móvil)">
         {scheduled.map(emp => {
           const s1 = slotByType(emp.breaks, 'silla1');
           const bk = slotByType(emp.breaks, 'break');

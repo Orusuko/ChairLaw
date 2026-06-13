@@ -74,8 +74,11 @@ export default function App() {
   const timelineHostRef = useRef<HTMLDivElement>(null);
   const [timelineInnerW, setTimelineInnerW] = useState(900);
   const captureWideRef = useRef<HTMLDivElement>(null);
-  const captureTableRef = useRef<HTMLDivElement>(null);
+  const captureTableRef = useRef<HTMLDivElement>(null!);
+  const captureCardsRef = useRef<HTMLDivElement>(null!);
   const [exportErr, setExportErr] = useState<string | null>(null);
+
+  const tableRefs = { tableRef: captureTableRef, cardsRef: captureCardsRef };
 
   useEffect(() => {
     const el = timelineHostRef.current;
@@ -159,7 +162,19 @@ export default function App() {
                   Imagen PC / HD
                 </button>
                 <button type="button" className="btn-exp btn-exp--green"
-                  onClick={() => exportPng(captureTableRef.current, 'horarios_tabla_movil')}>
+                  onClick={async () => {
+                    const node = captureTableRef.current;
+                    if (!node) return;
+                    // Temporalmente sacar la tabla del off-screen para que html-to-image la capture
+                    const prev = { position: node.style.position, left: node.style.left, top: node.style.top };
+                    node.style.position = 'static';
+                    node.style.left = 'auto';
+                    node.style.top = 'auto';
+                    await exportPng(node, 'horarios_tabla_movil');
+                    node.style.position = prev.position;
+                    node.style.left = prev.left;
+                    node.style.top = prev.top;
+                  }}>
                   Tabla · teléfono
                 </button>
                 <button type="button" className="btn-exp btn-exp--wa"
@@ -169,7 +184,7 @@ export default function App() {
               </div>
             </div>
 
-            <ScheduleTable ref={captureTableRef} scheduled={scheduled} />
+            <ScheduleTable refs={tableRefs} scheduled={scheduled} />
 
             <div className="timeline-block-head">
               <h2 className="block-title">Timeline de Descansos</h2>

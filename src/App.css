@@ -2345,8 +2345,16 @@ html, body, #root {
   }
   .left-list-scroll { max-height: 22vh; }
 
-  /* Show mobile cards, hide desktop table */
-  .table-outer { display: none !important; }
+  /* En móvil mostramos tarjetas visualmente, pero la tabla sigue en el DOM
+     fuera de pantalla para que html-to-image pueda capturarla al exportar */
+  .table-outer {
+    position: absolute;
+    left: -9999px;
+    top: -9999px;
+    width: 900px;
+    pointer-events: none;
+    aria-hidden: true;
+  }
   .schedule-cards { display: block; }
 
   /* Export buttons: stack */
